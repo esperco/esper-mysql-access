@@ -1,0 +1,14 @@
+OCAML_LIBS = $(OCAML_LIBS_mysql-access)
+
+FILES[] =
+  mysql_lwt
+  mysql_access
+
+OCamlLibrary(mysql-access, $(FILES))
+Meta(mysql-access)
+
+.DEFAULT: META mysql-access.cma mysql-access.cmxa
+
+.PHONY: clean
+clean:
+  rm -f *.o *.a *.cm* *~ *.annot *.run *.opt META $(ATDGEN_OUTFILES)
