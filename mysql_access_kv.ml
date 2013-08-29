@@ -35,6 +35,9 @@ sig
   val get : key -> value option Lwt.t
     (* Get the value associated with the key if it exists. *)
 
+  val mget : key list -> (key * value) list Lwt.t
+    (* Get multiple values *)
+
   val get_exn : key -> value Lwt.t
     (* Get the value associated with the key, raising an exception
        if no such entry exists in the table. *)
@@ -87,6 +90,27 @@ struct
       )
     )
 
+  let mget keys =
+    match keys with
+        [] -> return []
+      | _ ->
+          let w =
+            String.concat " or "
+              (BatList.map (fun k -> sprintf "k='%s'" (esc_key k)) keys)
+          in
+          let st =
+            sprintf "select k, v from %s where %s;" esc_tblname w
+          in
+          Mysql_lwt.mysql_exec st (fun x ->
+            let res = Mysql_lwt.unwrap_result x in
+            let rows = Mysql_util.fetch_all res in
+            BatList.map (function
+              | [| Some k; Some v |] ->
+                  (Param.Key.of_string k, Param.Value.of_string v)
+              |  _ -> failwith ("Broken result returned on: " ^ st)
+            ) rows
+          )
+
   let get_exn key =
     get key >>= function
       | None -> key_not_found key
@@ -117,8 +141,10 @@ struct
     let st =
       sprintf "\
 create table if not exists %s (
-    k varchar(767) character set ascii primary key,
-    v blob
+       k varchar(767) character set ascii not null,
+       v blob not null,
+
+       primary key (k)
 ) engine=InnoDB;
 "
         esc_tblname

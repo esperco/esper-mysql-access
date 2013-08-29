@@ -1,9 +1,10 @@
 OCAML_LIBS = $(OCAML_LIBS_mysql-access)
 
 FILES[] =
+  mysql_util
   mysql_lwt
   mysql_access_kv
-  mysql_access_coll
+  mysql_access_set
 
 OCamlLibrary(mysql-access, $(FILES))
 Meta(mysql-access)
