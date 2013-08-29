@@ -4,46 +4,106 @@
 *)
 
 open Printf
+open Lwt
 
-type worker_env = Mysql.dbd Lazy.t
+let db_settings = {
+  Mysql.dbhost = Some "localhost";
+  dbname = Some "polecat";
+  dbport = None;
+  dbpwd = None;
+  dbuser = Some "root";
+  dbsocket = None;
+}
 
-(* called only in the worker *)
+(* called only in a worker *)
 let connect () =
-  printf "connect\n%!";
-  let db = Mysql.defaults in
-  Mysql.connect db
+  Mysql.connect db_settings
 
-let env : worker_env = lazy (connect ())
+type worker_env = {
+  dbd : Mysql.dbd Lazy.t;
+}
 
-let call =
-  let lazy_pool = lazy (
-    Nproc.Full.create 10
-      (fun () -> Lwt.return ())
-      env
-  ) in
-  let pool () =
-    fst (Lazy.force lazy_pool)
-  in
-  let call user_f =
-    let f service env () =
-      let dbd = Lazy.force env in
-      user_f dbd
+(*
+  This is available in all workers without going through marshalling.
+*)
+let env : worker_env = {
+  dbd = lazy (connect ());
+}
+
+(*
+  Call a function that should run in the pool.
+
+  The closure, its argument and the result will be marshalled, and therefore
+  may not contain custom blocks (e.g. type Mysql.result won't pass).
+*)
+let current_pool = ref None
+
+let get_current_pool () =
+  match !current_pool with
+      None ->
+        let pool =
+          Nproc.Full.create 10
+            (fun () -> Lwt.return ())
+            env
+        in
+        current_pool := Some pool;
+        pool
+    | Some x -> x
+
+let pool () = fst (get_current_pool ())
+
+let close_pool () =
+  match !current_pool with
+      None -> return ()
+    | Some (x, _) ->
+        current_pool := None;
+        Nproc.Full.close x
+
+let call user_f =
+  let f service env () = user_f env in
+  let p = pool () in
+  Nproc.Full.submit p ~f ()
+
+(*****)
+
+type exec_result =
+    Result of Mysql.result
+  | Error of string
+
+let unwrap_result (x : exec_result) : Mysql.result =
+  match x with
+      Result y -> y
+    | Error s -> failwith s
+
+let mysql_exec statement handler =
+  call (fun env ->
+    let dbd = Lazy.force env.dbd in
+    let exec_result =
+      try
+        let result = Mysql.exec dbd statement in
+        match Mysql.errmsg dbd with
+            None -> Result result
+          | Some s -> Error ("mysql error " ^ s)
+      with
+          Mysql.Error s -> Error ("mysql error " ^ s)
+        | e ->
+            Error
+              ("exception raised by Mysql.exec: " ^ (Log.string_of_exn e))
     in
-    let p = pool () in
-    printf "submit\n%!";
-    Nproc.Full.submit p f ()
-  in
-  call
+    (* Exceptions raised by handler are caught and logged in the worker
+       because they can't be marshalled. *)
+    handler exec_result
+  ) >>= function
+    | None ->
+        (* Detailed error was already logged by the worker *)
+        failwith ("mysql query via nproc failed: " ^ statement)
+    | Some x -> return x
 
 let test () =
-  let result =
-    Lwt_main.run (
-      call (fun dbd ->
-        1 + 1
-        (*Mysql.exec dbd "create database mytest;"*)
-      )
-    )
-  in
-  result = Some 2
+  Lwt_main.run (
+    mysql_exec "create database if not exists mytest;" ignore >>= fun () ->
+    close_pool () >>= fun () ->
+    return true
+  )
 
 let tests = [ "basic nproc test", test ]
