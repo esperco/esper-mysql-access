@@ -42,11 +42,28 @@ sig
     (* Get the value associated with the key, raising an exception
        if no such entry exists in the table. *)
 
-  val put : key -> value -> unit Lwt.t
-    (* Add a new entry to the table or replace the existing one. *)
+  val update : key -> (value option -> value Lwt.t) -> value Lwt.t
+    (* Set a write lock on the table/key pair,
+       read the value and write the new value
+       upon termination of the user-given function. *)
 
-  val delete : key -> unit Lwt.t
-    (* Remove the given entry if it exists. *)
+  val update_exn : key -> (value -> value Lwt.t) -> value Lwt.t
+    (* Same as [update] but raises an exception if the value does
+       not exist initially. *)
+
+  val with_lock : key -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+    (* Set a write lock on the table/key pair while the user-given
+       function is running. [update] and [update_exn] are usually more useful.
+       Deleting a value safely is one use of this function.
+    *)
+
+  val unsafe_put : key -> value -> unit Lwt.t
+    (* Add a new entry to the table or replace the existing one
+       regardless of the presence of a lock. *)
+
+  val unsafe_delete : key -> unit Lwt.t
+    (* Remove the given entry if it exists regardless of the presence
+       of a lock. *)
 
   (**/**)
   (* testing only; not the authoritative copy for this schema *)
@@ -116,7 +133,7 @@ struct
       | None -> key_not_found key
       | Some x -> return x
 
-  let put key value =
+  let unsafe_put key value =
     let st =
       sprintf "replace into %s(k, v) values ('%s', '%s');"
         esc_tblname (esc_key key) (esc_value value)
@@ -126,7 +143,7 @@ struct
       ()
     )
 
-  let delete key =
+  let unsafe_delete key =
     let st =
       sprintf "delete from %s where k='%s';"
         esc_tblname (esc_key key)
@@ -134,6 +151,25 @@ struct
     Mysql_lwt.mysql_exec st (fun x ->
       let _res = Mysql_lwt.unwrap_result x in
       ()
+    )
+
+  let with_lock k f = (* TODO not implemented *)
+    f ()
+
+  let update k f =
+    with_lock k (fun () ->
+      get k >>= fun opt_v ->
+      f opt_v >>= fun v' ->
+      unsafe_put k v' >>= fun () ->
+      return v'
+    )
+
+  let update_exn k f =
+    with_lock k (fun () ->
+      get_exn k >>= fun v ->
+      f v >>= fun v' ->
+      unsafe_put k v' >>= fun () ->
+      return v'
     )
 
   (* NOT the authoritative copy of the schema. Do not use in production. *)
@@ -177,14 +213,14 @@ let test () =
     Random.self_init ();
     let k = Random.int 1_000_000 in
     let v = "abc" in
-    Testkv.put k v >>= fun () ->
+    Testkv.unsafe_put k v >>= fun () ->
     Testkv.get_exn k >>= fun v' ->
     assert (v' = v);
     let v2 = "def" in
-    Testkv.put k v2 >>= fun () ->
+    Testkv.unsafe_put k v2 >>= fun () ->
     Testkv.get_exn k >>= fun v2' ->
     assert (v2' = v2);
-    Testkv.delete k >>= fun () ->
+    Testkv.unsafe_delete k >>= fun () ->
     Testkv.get k >>= fun opt_v ->
     assert (opt_v = None);
     return true
