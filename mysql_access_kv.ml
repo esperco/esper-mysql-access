@@ -42,12 +42,12 @@ sig
     (* Get the value associated with the key, raising an exception
        if no such entry exists in the table. *)
 
-  val update : key -> (value option -> value Lwt.t) -> value Lwt.t
+  val update : key -> (value option -> (value * 'a) Lwt.t) -> 'a Lwt.t
     (* Set a write lock on the table/key pair,
        read the value and write the new value
        upon termination of the user-given function. *)
 
-  val update_exn : key -> (value -> value Lwt.t) -> value Lwt.t
+  val update_exn : key -> (value -> (value * 'a) Lwt.t) -> 'a Lwt.t
     (* Same as [update] but raises an exception if the value does
        not exist initially. *)
 
@@ -159,17 +159,17 @@ struct
   let update k f =
     with_lock k (fun () ->
       get k >>= fun opt_v ->
-      f opt_v >>= fun v' ->
+      f opt_v >>= fun (v', result) ->
       unsafe_put k v' >>= fun () ->
-      return v'
+      return result
     )
 
   let update_exn k f =
     with_lock k (fun () ->
       get_exn k >>= fun v ->
-      f v >>= fun v' ->
+      f v >>= fun (v', result) ->
       unsafe_put k v' >>= fun () ->
-      return v'
+      return result
     )
 
   (* NOT the authoritative copy of the schema. Do not use in production. *)
