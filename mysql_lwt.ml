@@ -6,18 +6,20 @@
 open Printf
 open Lwt
 
-let db_settings = {
-  Mysql.dbhost = Some "localhost";
-  dbname = Some "polecat";
-  dbport = None;
-  dbpwd = None;
-  dbuser = Some "root";
-  dbsocket = None;
-}
+let db_settings () =
+  let conf = Config.get () in
+  {
+    Mysql.dbhost = Some conf.Config_t.db_host;
+    dbname = Some conf.Config_t.db_name;
+    dbport = None;
+    dbpwd = None;
+    dbuser = Some "root";
+    dbsocket = None;
+  }
 
 (* called only in a worker *)
 let connect () =
-  Mysql.connect db_settings
+  Mysql.connect (db_settings ())
 
 type worker_env = {
   dbd : Mysql.dbd Lazy.t;
