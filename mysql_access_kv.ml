@@ -42,26 +42,31 @@ sig
     (* Get the value associated with the key, raising an exception
        if no such entry exists in the table. *)
 
-  val update : key -> (value option -> (value * 'a) Lwt.t) -> 'a Lwt.t
+  val update : key -> (value option -> (value option * 'a) Lwt.t) -> 'a Lwt.t
     (* Set a write lock on the table/key pair,
        read the value and write the new value
-       upon termination of the user-given function. *)
+       upon termination of the user-given function.
+       If the returned value is [None] the original value is preserved.
+    *)
 
-  val update_exn : key -> (value -> (value * 'a) Lwt.t) -> 'a Lwt.t
+  val update_exn : key -> (value -> (value option * 'a) Lwt.t) -> 'a Lwt.t
     (* Same as [update] but raises an exception if the value does
        not exist initially. *)
 
-  val with_lock : key -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+  val delete : key -> unit Lwt.t
+    (* Set a write lock on the table/key pair and delete the entry
+       if it exists. *)
+
+  val lock : key -> (unit -> 'a Lwt.t) -> 'a Lwt.t
     (* Set a write lock on the table/key pair while the user-given
        function is running. [update] and [update_exn] are usually more useful.
-       Deleting a value safely is one use of this function.
     *)
 
-  val unsafe_put : key -> value -> unit Lwt.t
+  val unprotected_put : key -> value -> unit Lwt.t
     (* Add a new entry to the table or replace the existing one
        regardless of the presence of a lock. *)
 
-  val unsafe_delete : key -> unit Lwt.t
+  val unprotected_delete : key -> unit Lwt.t
     (* Remove the given entry if it exists regardless of the presence
        of a lock. *)
 
@@ -133,7 +138,7 @@ struct
       | None -> key_not_found key
       | Some x -> return x
 
-  let unsafe_put key value =
+  let unprotected_put key value =
     let st =
       sprintf "replace into %s(k, v) values ('%s', '%s');"
         esc_tblname (esc_key key) (esc_value value)
@@ -143,7 +148,7 @@ struct
       ()
     )
 
-  let unsafe_delete key =
+  let unprotected_delete key =
     let st =
       sprintf "delete from %s where k='%s';"
         esc_tblname (esc_key key)
@@ -153,23 +158,34 @@ struct
       ()
     )
 
-  let with_lock k f = (* TODO not implemented *)
+  let lock k f = (* TODO not implemented *)
     f ()
 
   let update k f =
-    with_lock k (fun () ->
+    lock k (fun () ->
       get k >>= fun opt_v ->
-      f opt_v >>= fun (v', result) ->
-      unsafe_put k v' >>= fun () ->
+      f opt_v >>= fun (opt_v', result) ->
+      (match opt_v' with
+        | None -> return ()
+        | Some v' -> unprotected_put k v'
+      ) >>= fun () ->
       return result
     )
 
   let update_exn k f =
-    with_lock k (fun () ->
+    lock k (fun () ->
       get_exn k >>= fun v ->
-      f v >>= fun (v', result) ->
-      unsafe_put k v' >>= fun () ->
+      f v >>= fun (opt_v', result) ->
+      (match opt_v' with
+        | None -> return ()
+        | Some v' -> unprotected_put k v'
+      ) >>= fun () ->
       return result
+    )
+
+  let delete k =
+    lock k (fun () ->
+      unprotected_delete k
     )
 
   (* NOT the authoritative copy of the schema. Do not use in production. *)
@@ -213,14 +229,14 @@ let test () =
     Random.self_init ();
     let k = Random.int 1_000_000 in
     let v = "abc" in
-    Testkv.unsafe_put k v >>= fun () ->
+    Testkv.unprotected_put k v >>= fun () ->
     Testkv.get_exn k >>= fun v' ->
     assert (v' = v);
     let v2 = "def" in
-    Testkv.unsafe_put k v2 >>= fun () ->
+    Testkv.unprotected_put k v2 >>= fun () ->
     Testkv.get_exn k >>= fun v2' ->
     assert (v2' = v2);
-    Testkv.unsafe_delete k >>= fun () ->
+    Testkv.unprotected_delete k >>= fun () ->
     Testkv.get k >>= fun opt_v ->
     assert (opt_v = None);
     return true
