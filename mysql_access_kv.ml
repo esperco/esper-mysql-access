@@ -158,8 +158,8 @@ struct
       ()
     )
 
-  let lock k f = (* TODO not implemented *)
-    f ()
+  let lock k f =
+    Redis_mutex.with_mutex (Param.Key.to_string k) f
 
   let update k f =
     lock k (fun () ->
