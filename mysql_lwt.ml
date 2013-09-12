@@ -21,15 +21,28 @@ let db_settings () =
 let connect () =
   Mysql.connect (db_settings ())
 
+let get_connection dbd_ref =
+  match !dbd_ref with
+    | None ->
+        let dbd = connect () in
+        dbd_ref := Some dbd;
+        dbd
+    | Some dbd ->
+        try Mysql.ping dbd; dbd
+        with Mysql.Error msg ->
+          let dbd = connect () in
+          dbd_ref := Some dbd;
+          dbd
+
 type worker_env = {
-  dbd : Mysql.dbd Lazy.t;
+  dbd_ref : Mysql.dbd option ref;
 }
 
 (*
   This is available in all workers without going through marshalling.
 *)
 let env : worker_env = {
-  dbd = lazy (connect ());
+  dbd_ref = ref None;
 }
 
 (*
@@ -79,9 +92,9 @@ let unwrap_result (x : exec_result) : Mysql.result =
 
 let mysql_exec statement handler =
   call (fun env ->
-    let dbd = Lazy.force env.dbd in
     let exec_result =
       try
+        let dbd = get_connection env.dbd_ref in
         let result = Mysql.exec dbd statement in
         match Mysql.errmsg dbd with
             None -> Result result
