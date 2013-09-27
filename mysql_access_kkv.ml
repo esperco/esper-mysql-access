@@ -1,5 +1,6 @@
 (*
   Disjoint sets of values represented using one SQL table.
+  This is suitable for representing one level of a hierarchy.
 
   Implementation of a functor 'Make' that takes as input the details
   of a table containing 3 columns:
@@ -45,6 +46,10 @@ sig
 
   val get2 : key2 -> (key1 * value) option Lwt.t
     (* Get the value associated with the key if it exists. *)
+
+  val put : key1 -> key2 -> value -> unit Lwt.t
+    (* Set the container key and the value associated with the key key2,
+       replacing the existing row if any. *)
 
   val mget2 : key2 list -> (key1 * key2 * value) list Lwt.t
     (* Get multiple values *)
@@ -245,6 +250,11 @@ struct
         | Some (k1, v') -> unprotected_put k1 k2 v'
       ) >>= fun () ->
       return result
+    )
+
+  let put k1 k2 v =
+    update k2 (fun _old ->
+      return (Some (k1, v), ())
     )
 
   let delete1 k =

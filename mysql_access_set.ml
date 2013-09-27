@@ -1,3 +1,11 @@
+(*
+  Arbitrary relation between two sets of keys.
+
+  Each pair of keys (k1, k2) is unique and associated with a numeric value
+  that can be used for ordering. Neither column k1 or k2 requires keys
+  to be unique in the column.
+*)
+
 module type Serializable =
 sig
   type t

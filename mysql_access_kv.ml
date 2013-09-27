@@ -1,4 +1,6 @@
 (*
+  Unique keys associated with a value.
+
   Implementation of a functor 'Make' that takes as input the details
   of a key-value table (table name, key and value types,
   serialization functions) and returns type-safe operations
@@ -34,6 +36,10 @@ sig
 
   val get : key -> value option Lwt.t
     (* Get the value associated with the key if it exists. *)
+
+  val put : key -> value -> unit Lwt.t
+    (* Set the value associated with the key, overwriting the
+       existing value if any. *)
 
   val mget : key list -> (key * value) list Lwt.t
     (* Get multiple values *)
@@ -184,6 +190,11 @@ struct
         | Some v' -> unprotected_put k v'
       ) >>= fun () ->
       return result
+    )
+
+  let put k v =
+    update k (function _old ->
+      return (Some v, ())
     )
 
   let delete k =

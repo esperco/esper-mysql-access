@@ -6,6 +6,7 @@ FILES[] =
   mysql_access_kv
   mysql_access_kkv
   mysql_access_set
+  mysql_access_util
 
 OCamlLibrary(mysql-access, $(FILES))
 Meta(mysql-access)
