@@ -3,6 +3,7 @@
   each in charge of one database connection.
 *)
 
+open Log
 open Printf
 open Lwt
 
@@ -53,11 +54,13 @@ let env : worker_env = {
 *)
 let current_pool = ref None
 
+let pool_size = 10
+
 let get_current_pool () =
   match !current_pool with
       None ->
         let pool =
-          Nproc.Full.create 10
+          Nproc.Full.create pool_size
             (fun () -> Lwt.return ())
             env
         in
@@ -75,7 +78,8 @@ let close_pool () =
         Nproc.Full.close x
 
 let call user_f =
-  let f service env () = user_f env in
+  let f service env () =
+    user_f env in
   let p = pool () in
   Nproc.Full.submit p ~f ()
 
@@ -99,11 +103,12 @@ let mysql_exec statement handler =
         match Mysql.errmsg dbd with
             None -> Result result
           | Some s -> Error ("mysql error " ^ s)
-      with
-          Mysql.Error s -> Error ("mysql error " ^ s)
-        | e ->
-            Error
-              ("exception raised by Mysql.exec: " ^ (Log.string_of_exn e))
+      with e ->
+        match e with
+            Mysql.Error s -> Error ("mysql error " ^ s)
+          | e ->
+              Error
+                ("exception raised by Mysql.exec: " ^ (string_of_exn e))
     in
     (* Exceptions raised by handler are caught and logged in the worker
        because they can't be marshalled. *)
