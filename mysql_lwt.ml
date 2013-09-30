@@ -39,49 +39,51 @@ type worker_env = {
   dbd_ref : Mysql.dbd option ref;
 }
 
-(*
-  This is available in all workers without going through marshalling.
-*)
-let env : worker_env = {
+(* Thread-local storage, keyed by thread ID *)
+let tls = Hashtbl.create 100
+
+let make_protector () =
+  let mutex = Mutex.create () in
+  let protect f =
+    try
+      Mutex.lock mutex;
+      let result = f () in
+      Mutex.unlock mutex;
+      result
+    with e ->
+      Mutex.unlock mutex;
+      raise e
+  in
+  protect
+
+let init_worker () : worker_env = {
   dbd_ref = ref None;
 }
 
+let getenv =
+  let protect = make_protector () in
+  let get () =
+    let k = Thread.self () in
+    try Hashtbl.find tls k
+    with Not_found ->
+      let v = init_worker () in
+      protect (fun () ->
+        Hashtbl.add tls k v
+      );
+      v
+  in
+  get
+
 (*
-  Call a function that should run in the pool.
-
-  The closure, its argument and the result will be marshalled, and therefore
-  may not contain custom blocks (e.g. type Mysql.result won't pass).
+  Call a function that should run in one of the threads of the pool.
+  The maximum number of threads could be configured with Lwt_preemptive.init.
 *)
-let current_pool = ref None
-
-let pool_size = 10
-
-let get_current_pool () =
-  match !current_pool with
-      None ->
-        let pool =
-          Nproc.Full.create pool_size
-            (fun () -> Lwt.return ())
-            env
-        in
-        current_pool := Some pool;
-        pool
-    | Some x -> x
-
-let pool () = fst (get_current_pool ())
-
-let close_pool () =
-  match !current_pool with
-      None -> return ()
-    | Some (x, _) ->
-        current_pool := None;
-        Nproc.Full.close x
-
 let call user_f =
-  let f service env () =
-    user_f env in
-  let p = pool () in
-  Nproc.Full.submit p ~f ()
+  let f () =
+    let worker_env = getenv () in
+    user_f worker_env
+  in
+  Lwt_preemptive.detach f ()
 
 (*****)
 
@@ -113,16 +115,11 @@ let mysql_exec statement handler =
     (* Exceptions raised by handler are caught and logged in the worker
        because they can't be marshalled. *)
     handler exec_result
-  ) >>= function
-    | None ->
-        (* Detailed error was already logged by the worker *)
-        failwith ("mysql query via nproc failed: " ^ statement)
-    | Some x -> return x
+  )
 
 let test () =
   Lwt_main.run (
     mysql_exec "create database if not exists mytest;" ignore >>= fun () ->
-    close_pool () >>= fun () ->
     return true
   )
 
