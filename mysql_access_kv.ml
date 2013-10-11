@@ -128,10 +128,12 @@ struct
     Mysql_lwt.mysql_exec st (fun x ->
       let res = Mysql_lwt.unwrap_result x in
       let rows = Mysql_util.fetch_all res in
-      BatList.map (function
-        | [| Some v |] -> Param.Value.of_string v
+      BatList.filter_map (function
+        | [| Some v |] ->
+            (try Some (Param.Value.of_string v)
+             with _ -> None)
         |  _ -> failwith ("Broken result returned on: " ^ st)
-      ) rows
+        ) rows
     )
 
   let mget keys =
