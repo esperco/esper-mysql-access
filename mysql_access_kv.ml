@@ -79,6 +79,9 @@ sig
   (**/**)
   (* testing only; not the authoritative copy for this schema *)
   val create_table : unit -> unit Lwt.t
+
+  val get_all : unit -> value list Lwt.t
+    (* Get all entries in the table, which can be a lot. *)
 end
 
 
@@ -116,6 +119,19 @@ struct
         | None -> None
         | Some _ -> failwith ("Broken result returned on: " ^ st)
       )
+    )
+
+  let get_all () =
+    let st =
+      sprintf "select v from %s;" esc_tblname
+    in
+    Mysql_lwt.mysql_exec st (fun x ->
+      let res = Mysql_lwt.unwrap_result x in
+      let rows = Mysql_util.fetch_all res in
+      BatList.map (function
+        | [| Some v |] -> Param.Value.of_string v
+        |  _ -> failwith ("Broken result returned on: " ^ st)
+      ) rows
     )
 
   let mget keys =
