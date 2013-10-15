@@ -42,7 +42,7 @@ sig
     *)
 
   val get1 : key1 -> (key2 * value) list Lwt.t
-    (* Get the value associated with the key if it exists. *)
+    (* Get the values associated with the key. *)
 
   val get2 : key2 -> (key1 * value) option Lwt.t
     (* Get the value associated with the key if it exists. *)
