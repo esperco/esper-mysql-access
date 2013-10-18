@@ -31,8 +31,15 @@ sig
        (currently embedded in file 'create-kv-tbl.sql')
     *)
 
-  val get : key -> (value * ord) option Lwt.t
+  val get : key -> value option Lwt.t
     (* Get the value associated with the key if it exists. *)
+
+  val get_exn : key -> value Lwt.t
+    (* Get the value associated with the key, raising an exception
+       if no such entry exists in the table. *)
+
+  val get_full : key -> (value * ord) option Lwt.t
+    (* Same as [get] but returns the 'ord' field as well. *)
 
   val put : key -> value -> unit Lwt.t
     (* Set the value associated with the key, overwriting the
@@ -40,10 +47,6 @@ sig
 
   val mget : key list -> (key * value * ord) list Lwt.t
     (* Get multiple values *)
-
-  val get_exn : key -> (value * ord) Lwt.t
-    (* Get the value associated with the key, raising an exception
-       if no such entry exists in the table. *)
 
   val update :
     key ->
@@ -132,7 +135,7 @@ struct
     failwith (sprintf "Key '%s' already exists in table '%s'"
                 (esc_key key) esc_tblname)
 
-  let get key =
+  let get_full key =
     let st =
       sprintf "select v, ord from %s where k='%s';"
         esc_tblname (esc_key key)
@@ -146,6 +149,26 @@ struct
         | Some _ -> failwith ("Broken result returned on: " ^ st)
       )
     )
+
+  let get key =
+    let st =
+      sprintf "select v from %s where k='%s';"
+        esc_tblname (esc_key key)
+    in
+    Mysql_lwt.mysql_exec st (fun x ->
+      let res = Mysql_lwt.unwrap_result x in
+      (match Mysql.fetch res with
+          Some [| Some v |] ->
+           Some (Param.Value.of_string v)
+        | None -> None
+        | Some _ -> failwith ("Broken result returned on: " ^ st)
+      )
+    )
+
+  let get_exn key =
+    get key >>= function
+      | None -> key_not_found key
+      | Some x -> return x
 
   let get_all () =
     let st =
@@ -185,11 +208,6 @@ struct
             ) rows
           )
 
-  let get_exn key =
-    get key >>= function
-      | None -> key_not_found key
-      | Some x -> return x
-
   let unprotected_put key value ord =
     let st =
       sprintf "replace into %s(k, v, ord) values ('%s', '%s', %s);"
@@ -218,7 +236,7 @@ struct
 
   let update k f =
     lock k (fun () ->
-      get k >>= fun opt_v_ord ->
+      get_full k >>= fun opt_v_ord ->
       f opt_v_ord >>= fun (opt_v', result) ->
       (match opt_v' with
         | None -> return ()
@@ -235,15 +253,17 @@ struct
 
   let update_exn k f =
     lock k (fun () ->
-      get_exn k >>= fun v_ord ->
-      f v_ord >>= fun (opt_v', result) ->
-      (match opt_v' with
-        | None -> return ()
-        | Some v' ->
-            let ord' = update_ord k v' (snd v_ord) in
-            unprotected_put k v' ord'
-      ) >>= fun () ->
-      return result
+      get_full k >>= function
+      | None -> key_not_found k
+      | Some v_ord ->
+          f v_ord >>= fun (opt_v', result) ->
+          (match opt_v' with
+           | None -> return ()
+           | Some v' ->
+               let ord' = update_ord k v' (snd v_ord) in
+               unprotected_put k v' ord'
+          ) >>= fun () ->
+          return result
     )
 
   let create_exn k v =
@@ -313,18 +333,16 @@ let test () =
     let v = "abc" in
     let ord = sqrt 2. in
     Testkv.unprotected_put k v ord >>= fun () ->
-    Testkv.get_exn k >>= fun (v', ord') ->
+    Testkv.get_exn k >>= fun v' ->
     assert (v' = v);
-    assert (ord' = ord);
     let v2 = "def" in
     let ord2 = sqrt 3. in
     Testkv.unprotected_put k v2 ord2 >>= fun () ->
-    Testkv.get_exn k >>= fun (v2', ord2') ->
+    Testkv.get_exn k >>= fun v2' ->
     assert (v2' = v2);
-    assert (ord2' = ord2);
     Testkv.unprotected_delete k >>= fun () ->
-    Testkv.get k >>= fun opt_v_ord ->
-    assert (opt_v_ord = None);
+    Testkv.get k >>= fun opt_v ->
+    assert (opt_v = None);
     return true
   )
 
