@@ -21,6 +21,8 @@ sig
   module Key2 : Mysql_types.Serializable
   module Value : Mysql_types.Serializable
   module Ord : Mysql_types.Numeric
+  val create_ord : Key1.t -> Key2.t -> Value.t -> Ord.t
+  val update_ord : (Key1.t -> Key2.t -> Value.t -> Ord.t -> Ord.t) option
 end
 
 module type KKV =
@@ -36,26 +38,27 @@ sig
        (currently embedded in file 'create-kv-tbl.sql')
     *)
 
-  val get1 : key1 -> (key2 * value) list Lwt.t
+  val get1 : key1 -> (key2 * value * ord) list Lwt.t
     (* Get the values associated with the key. *)
 
-  val get2 : key2 -> (key1 * value) option Lwt.t
+  val get2 : key2 -> (key1 * value * ord) option Lwt.t
     (* Get the value associated with the key if it exists. *)
 
   val put : key1 -> key2 -> value -> unit Lwt.t
     (* Set the container key and the value associated with the key key2,
        replacing the existing row if any. *)
 
-  val mget2 : key2 list -> (key1 * key2 * value) list Lwt.t
+  val mget2 : key2 list -> (key1 * key2 * value * ord) list Lwt.t
     (* Get multiple values *)
 
-  val get2_exn : key2 -> (key1 * value) Lwt.t
+  val get2_exn : key2 -> (key1 * value * ord) Lwt.t
     (* Get the value associated with the key, raising an exception
        if no such entry exists in the table. *)
 
   val update :
     key2 ->
-    ((key1 * value) option -> ((key1 * value) option * 'a) Lwt.t) -> 'a Lwt.t
+    ((key1 * value * ord) option -> ((key1 * value) option * 'a) Lwt.t) ->
+    'a Lwt.t
     (* Set a write lock on the table/key pair,
        read the value and write the new value
        upon termination of the user-given function.
@@ -64,7 +67,8 @@ sig
 
   val update_exn :
     key2 ->
-    ((key1 * value) -> ((key1 * value) option * 'a) Lwt.t) -> 'a Lwt.t
+    ((key1 * value * ord) -> ((key1 * value) option * 'a) Lwt.t) ->
+    'a Lwt.t
     (* Same as [update] but raises an exception if the value does
        not exist initially. *)
 
@@ -82,7 +86,7 @@ sig
        function is running. [update] and [update_exn] are usually more useful.
     *)
 
-  val unprotected_put : key1 -> key2 -> value -> unit Lwt.t
+  val unprotected_put : key1 -> key2 -> value -> ord -> unit Lwt.t
     (* Add a new entry to the table or replace the existing one
        regardless of the presence of a lock. *)
 
@@ -118,6 +122,13 @@ struct
   type value = Param.Value.t
   type ord = Param.Ord.t
   let tblname = Param.tblname
+  let create_ord = Param.create_ord
+
+  let update_ord =
+    match Param.update_ord with
+      None -> (fun k1 k2 v ord -> ord)
+    | Some f -> f
+
   let esc_tblname = Mysql.escape tblname
   let esc_key1 key1 = Mysql.escape (Param.Key1.to_string key1)
   let esc_key2 key2 = Mysql.escape (Param.Key2.to_string key2)
@@ -134,29 +145,33 @@ struct
 
   let get1 k1 =
     let st =
-      sprintf "select k2, v from %s where k1='%s';"
+      sprintf "select k2, v, ord from %s where k1='%s';"
         esc_tblname (esc_key1 k1)
     in
     Mysql_lwt.mysql_exec st (fun x ->
       let res = Mysql_lwt.unwrap_result x in
       let rows = Mysql_util.fetch_all res in
       BatList.map (function
-        | [| Some k2; Some v |] ->
-            (Param.Key2.of_string k2, Param.Value.of_string v)
+        | [| Some k2; Some v; Some ord |] ->
+            (Param.Key2.of_string k2,
+             Param.Value.of_string v,
+             ord_of_string ord)
         |  _ -> failwith ("Broken result returned on: " ^ st)
       ) rows
     )
 
   let get2 key =
     let st =
-      sprintf "select k1, v from %s where k2='%s';"
+      sprintf "select k1, v, ord from %s where k2='%s';"
         esc_tblname (esc_key2 key)
     in
     Mysql_lwt.mysql_exec st (fun x ->
       let res = Mysql_lwt.unwrap_result x in
       (match Mysql.fetch res with
-          Some [| Some k1; Some v |] ->
-            Some (Param.Key1.of_string k1, Param.Value.of_string v)
+          Some [| Some k1; Some v; Some ord |] ->
+            Some (Param.Key1.of_string k1,
+                  Param.Value.of_string v,
+                  ord_of_string ord)
         | None -> None
         | Some _ -> failwith ("Broken result returned on: " ^ st)
       )
@@ -171,16 +186,17 @@ struct
               (BatList.map (fun k -> sprintf "k2='%s'" (esc_key2 k)) keys)
           in
           let st =
-            sprintf "select k1, k2, v from %s where %s;" esc_tblname w
+            sprintf "select k1, k2, v, ord from %s where %s;" esc_tblname w
           in
           Mysql_lwt.mysql_exec st (fun x ->
             let res = Mysql_lwt.unwrap_result x in
             let rows = Mysql_util.fetch_all res in
             BatList.map (function
-              | [| Some k1; Some k2; Some v |] ->
+              | [| Some k1; Some k2; Some v; Some ord |] ->
                   (Param.Key1.of_string k1,
                    Param.Key2.of_string k2,
-                   Param.Value.of_string v)
+                   Param.Value.of_string v,
+                   ord_of_string ord)
               |  _ -> failwith ("Broken result returned on: " ^ st)
             ) rows
           )
@@ -234,22 +250,31 @@ struct
 
   let update k2 f =
     lock2 k2 (fun () ->
-      get2 k2 >>= fun opt_v ->
-      f opt_v >>= fun (opt_v', result) ->
+      get2 k2 >>= fun opt_x ->
+      f opt_x >>= fun (opt_v', result) ->
       (match opt_v' with
         | None -> return ()
-        | Some (k1, v') -> unprotected_put k1 k2 v'
+        | Some (k1', v') ->
+            let ord' =
+              match opt_x with
+              | None -> create_ord k1' k2 v'
+              | Some (_k1, _v, ord) -> update_ord k1' k2 v' ord
+            in
+            unprotected_put k1' k2 v' ord'
       ) >>= fun () ->
       return result
     )
 
   let update_exn k2 f =
     lock2 k2 (fun () ->
-      get2_exn k2 >>= fun v ->
-      f v >>= fun (opt_v', result) ->
+      get2_exn k2 >>= fun x ->
+      f x >>= fun (opt_v', result) ->
       (match opt_v' with
         | None -> return ()
-        | Some (k1, v') -> unprotected_put k1 k2 v'
+        | Some (k1', v') ->
+            let _k1, _v, ord = x in
+            let ord' = update_ord k1' k2 v' ord in
+            unprotected_put k1' k2 v' ord'
       ) >>= fun () ->
       return result
     )
@@ -308,6 +333,8 @@ let test () =
       let of_string s = s
     end
     module Ord = Util_time
+    let create_ord = Mysql_types.KKV.created
+    let update_ord = Mysql_types.KKV.last_modified
   end
   in
   let module Testkkv = Make (Param) in
@@ -320,17 +347,17 @@ let test () =
     let k22 = Random.int 1_000_000 in
     let v1 = "abc" in
     let v2 = "def" in
-    Testkkv.unprotected_put k1 k21 v1 >>= fun () ->
-    Testkkv.unprotected_put k1 k22 v2 >>= fun () ->
-    Testkkv.get2_exn k21 >>= fun (k1', v') ->
+    Testkkv.put k1 k21 v1 >>= fun () ->
+    Testkkv.put k1 k22 v2 >>= fun () ->
+    Testkkv.get2_exn k21 >>= fun (k1', v', ord') ->
     assert (k1' = k1);
     assert (v' = v1);
-    Testkkv.get2_exn k22 >>= fun (k1', v') ->
+    Testkkv.get2_exn k22 >>= fun (k1', v', ord') ->
     assert (k1' = k1);
     assert (v' = v2);
     let v3 = "ggggg" in
-    Testkkv.unprotected_put k1 k21 v3 >>= fun () ->
-    Testkkv.get2_exn k21 >>= fun (k1, v3') ->
+    Testkkv.put k1 k21 v3 >>= fun () ->
+    Testkkv.get2_exn k21 >>= fun (k1, v3', ord') ->
     assert (v3' = v3);
     Testkkv.get1 k1 >>= fun l ->
     assert (List.length l = 2);
@@ -342,9 +369,9 @@ let test () =
     assert (l = []);
 
     (* leave something in the table so we can look at it later *)
-    Testkkv.unprotected_put 12 34 "blob1" >>= fun () ->
-    Testkkv.unprotected_put 12 56 "blob2" >>= fun () ->
-    Testkkv.unprotected_put 34 78 "blob3" >>= fun () ->
+    Testkkv.put 12 34 "blob1" >>= fun () ->
+    Testkkv.put 12 56 "blob2" >>= fun () ->
+    Testkkv.put 34 78 "blob3" >>= fun () ->
 
     return true
   )
