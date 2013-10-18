@@ -6,7 +6,7 @@
   to be unique in the column.
 *)
 
-module type Set_param =
+module type KK_param =
 sig
   val tblname : string
   module Key1 : Mysql_types.Serializable
@@ -14,7 +14,7 @@ sig
   module Ord : Mysql_types.Numeric
 end
 
-module type Set =
+module type KK =
 sig
   val tblname : string
   type key1
@@ -23,7 +23,10 @@ sig
 
   (* Operations on multiple elements *)
 
-  val get_all :
+  (* TODO: implement get2 *)
+  (* TODO: rename or implement same functions as for KV and KKV *)
+
+  val get1 :
     ?direction: Mysql_types.direction ->
     ?min_ord: ord ->
     ?max_ord: ord ->
@@ -43,7 +46,7 @@ sig
   val create_table : unit -> unit Lwt.t
 end
 
-module Make (Param : Set_param) : Set
+module Make (Param : KK_param) : KK
   with type key1 = Param.Key1.t
   and type key2 = Param.Key2.t
   and type ord = Param.Ord.t =
@@ -58,6 +61,7 @@ struct
   type key2 = Param.Key2.t
   type ord = Param.Ord.t
   let tblname = Param.tblname
+
   let esc_tblname = Mysql.escape tblname
   let esc_key1 key = Mysql.escape (Param.Key1.to_string key)
   let esc_key2 key = Mysql.escape (Param.Key2.to_string key)
@@ -67,7 +71,7 @@ struct
   let ord_of_string s =
     Param.Ord.of_float (float_of_string s)
 
-  let get_all ?(direction = `Asc) ?min_ord ?max_ord ?max_count k1 =
+  let get1 ?(direction = `Asc) ?min_ord ?max_ord ?max_count k1 =
     let mini =
       match min_ord with
       | None -> ""
@@ -183,14 +187,9 @@ let test () =
       let to_string = string_of_int
       let of_string = int_of_string
     end
-    module Timestamp_ord = struct
-      type t = Util_time.t
-      let to_float = Util_time.to_float
-      let of_float = Util_time.of_float
-    end
     module Key1 = Int_key
     module Key2 = Int_key
-    module Ord = Timestamp_ord
+    module Ord = Util_time
   end
   in
   let module Testset = Make (Param) in
@@ -207,7 +206,7 @@ let test () =
     Lwt_list.iter_s (fun (k2, ord) ->
       Testset.add k1 k2 ord
     ) l1 >>= fun () ->
-    Testset.get_all k1 >>= fun l1' ->
+    Testset.get1 k1 >>= fun l1' ->
     assert (List.sort compare l1' = List.sort compare l1);
     return true
   )
