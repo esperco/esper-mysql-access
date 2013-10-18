@@ -14,19 +14,13 @@
   See example of how to use the Make functor at the end of this file (test).
 *)
 
-module type Serializable =
-sig
-  type t
-  val to_string : t -> string
-  val of_string : string -> t
-end
-
 module type KKV_param =
 sig
   val tblname : string
-  module Key1 : Serializable
-  module Key2 : Serializable
-  module Value : Serializable
+  module Key1 : Mysql_types.Serializable
+  module Key2 : Mysql_types.Serializable
+  module Value : Mysql_types.Serializable
+  module Ord : Mysql_types.Numeric
 end
 
 module type KKV =
@@ -34,6 +28,7 @@ sig
   type key1
   type key2
   type value
+  type ord
 
   val tblname : string
     (* Name of the MySQL table.
@@ -108,7 +103,8 @@ end
 module Make (Param : KKV_param) : KKV
   with type key1 = Param.Key1.t
   and type key2 = Param.Key2.t
-  and type value = Param.Value.t =
+  and type value = Param.Value.t
+  and type ord = Param.Ord.t =
 
 
 (*** Implementation ***)
@@ -120,11 +116,17 @@ struct
   type key1 = Param.Key1.t
   type key2 = Param.Key2.t
   type value = Param.Value.t
+  type ord = Param.Ord.t
   let tblname = Param.tblname
   let esc_tblname = Mysql.escape tblname
   let esc_key1 key1 = Mysql.escape (Param.Key1.to_string key1)
   let esc_key2 key2 = Mysql.escape (Param.Key2.to_string key2)
   let esc_value value = Mysql.escape (Param.Value.to_string value)
+  let esc_ord ord =
+    Mysql_types.ord_of_float (Param.Ord.to_float ord)
+
+  let ord_of_string s =
+    Param.Ord.of_float (float_of_string s)
 
   let key2_not_found key2 =
     failwith (sprintf "Key '%s' not found in table '%s'"
@@ -188,10 +190,10 @@ struct
       | None -> key2_not_found key
       | Some x -> return x
 
-  let unprotected_put k1 k2 value =
+  let unprotected_put k1 k2 value ord =
     let st =
-      sprintf "replace into %s(k1, k2, v) values ('%s', '%s', '%s');"
-        esc_tblname (esc_key1 k1) (esc_key2 k2) (esc_value value)
+      sprintf "replace into %s(k1, k2, v, ord) values ('%s', '%s', '%s', %s);"
+        esc_tblname (esc_key1 k1) (esc_key2 k2) (esc_value value) (esc_ord ord)
     in
     Mysql_lwt.mysql_exec st (fun x ->
       let _res = Mysql_lwt.unwrap_result x in
@@ -275,9 +277,11 @@ create table if not exists %s (
        k1 varchar(767) character set ascii not null,
        k2 varchar(767) character set ascii not null,
        v blob not null,
+       ord double not null,
 
        primary key (k2),
-       index (k1)
+       index (k1),
+       index (ord)
 ) engine=InnoDB;
 "
         esc_tblname
@@ -303,6 +307,7 @@ let test () =
       let to_string s = s
       let of_string s = s
     end
+    module Ord = Util_time
   end
   in
   let module Testkkv = Make (Param) in

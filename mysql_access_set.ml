@@ -6,30 +6,13 @@
   to be unique in the column.
 *)
 
-module type Serializable =
-sig
-  type t
-  val to_string : t -> string
-  val of_string : string -> t
-end
-
-module type Numeric =
-sig
-  type t
-  val to_float : t -> float
-  val of_float : float -> t
-end
-
 module type Set_param =
 sig
   val tblname : string
-  module Key1 : Serializable
-  module Key2 : Serializable
-  module Ord : Numeric
+  module Key1 : Mysql_types.Serializable
+  module Key2 : Mysql_types.Serializable
+  module Ord : Mysql_types.Numeric
 end
-
-type direction = Asc | Desc
-    (* ascending or descending order *)
 
 module type Set =
 sig
@@ -40,14 +23,13 @@ sig
 
   (* Operations on multiple elements *)
 
-  val get_all : key1 -> (key2 * ord) list Lwt.t
-    (* return all elements of a set in no particular order *)
-
-  val get_page_by_key :
-    key1 -> int -> direction -> key2 option -> (key2 * ord) list Lwt.t
-
-  val get_page_by_ord :
-    key1 -> int -> direction -> (ord * key2) option -> (key2 * ord) list Lwt.t
+  val get_all :
+    ?direction: Mysql_types.direction ->
+    ?min_ord: ord ->
+    ?max_ord: ord ->
+    ?max_count: int ->
+    key1 -> (key2 * ord) list Lwt.t
+    (* return all elements of a set, sorted by 'ord' *)
 
   (* Operations on a single element *)
 
@@ -80,34 +62,50 @@ struct
   let esc_key1 key = Mysql.escape (Param.Key1.to_string key)
   let esc_key2 key = Mysql.escape (Param.Key2.to_string key)
   let esc_ord ord =
-    let x = Param.Ord.to_float ord in
-    match classify_float x with
-        FP_normal
-      | FP_subnormal
-      | FP_zero -> sprintf "%.17g" x
-      | FP_infinite
-      | FP_nan -> invalid_arg (sprintf "esc_ord: %g" x)
+    Mysql_types.ord_of_float (Param.Ord.to_float ord)
 
-  let get_all k1 =
+  let ord_of_string s =
+    Param.Ord.of_float (float_of_string s)
+
+  let get_all ?(direction = `Asc) ?min_ord ?max_ord ?max_count k1 =
+    let mini =
+      match min_ord with
+      | None -> ""
+      | Some x -> sprintf " and ord>=%s" (esc_ord x)
+    in
+    let maxi =
+      match max_ord with
+      | None -> ""
+      | Some x -> sprintf " and ord<=%s" (esc_ord x)
+    in
+    let order =
+      match direction with
+      | `Asc -> " order by ord asc"
+      | `Desc -> " order by ord desc"
+    in
+    let limit =
+      match max_count with
+      | None -> ""
+      | Some x -> sprintf " limit %d" x
+    in
     let st =
-      sprintf "select k2, ord from %s where k1='%s';"
-        esc_tblname (esc_key1 k1)
+      sprintf "select k2, ord from %s where k1='%s'%s%s%s%s;"
+        esc_tblname
+        (esc_key1 k1)
+        mini
+        maxi
+        order
+        limit
     in
     Mysql_lwt.mysql_exec st (fun x ->
       let res = Mysql_lwt.unwrap_result x in
       let rows = Mysql_util.fetch_all res in
       BatList.map (function
         | [| Some k2; Some ord |] ->
-            (Param.Key2.of_string k2, Param.Ord.of_float (float_of_string ord))
+            (Param.Key2.of_string k2, ord_of_string ord)
         |  _ -> failwith ("Broken result returned on: " ^ st)
       ) rows
     )
-
-  let get_page_by_key key length direction opt_start =
-    failwith "get_page_by_key: not implemented"
-
-  let get_page_by_ord key length direction opt_start =
-    failwith "get_page_by_key: not implemented"
 
   let get_ord k1 k2 =
     let st =
