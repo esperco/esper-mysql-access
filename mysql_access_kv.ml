@@ -62,6 +62,9 @@ sig
     (* Same as [update] but raises an exception if the value does
        not exist initially. *)
 
+  val create_exn : key -> value -> unit Lwt.t
+    (* Same as [update] but raises an exception if a value already exists. *)
+
   val delete : key -> unit Lwt.t
     (* Set a write lock on the table/key pair and delete the entry
        if it exists. *)
@@ -123,6 +126,10 @@ struct
 
   let key_not_found key =
     failwith (sprintf "Key '%s' not found in table '%s'"
+                (esc_key key) esc_tblname)
+
+  let key_exists key =
+    failwith (sprintf "Key '%s' already exists in table '%s'"
                 (esc_key key) esc_tblname)
 
   let get key =
@@ -238,6 +245,11 @@ struct
       ) >>= fun () ->
       return result
     )
+
+  let create_exn k v =
+    update k (function
+    | None -> return (Some v, ())
+    | Some _ -> key_exists k)
 
   let put k v =
     update k (function _old ->
