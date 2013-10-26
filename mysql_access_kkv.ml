@@ -38,7 +38,12 @@ sig
        (currently embedded in file 'create-kv-tbl.sql')
     *)
 
-  val get1 : key1 -> (key2 * value * ord) list Lwt.t
+  val get1 :
+    ?direction: Mysql_types.direction ->
+    ?min_ord: ord ->
+    ?max_ord: ord ->
+    ?max_count: int ->
+    key1 -> (key2 * value * ord) list Lwt.t
     (* Get the values associated with the key. *)
 
   val get2 : key2 -> (key1 * value * ord) option Lwt.t
@@ -144,10 +149,35 @@ struct
     failwith (sprintf "Key '%s' not found in table '%s'"
                 (esc_key2 key2) esc_tblname)
 
-  let get1 k1 =
+  let get1 ?(direction = `Asc) ?min_ord ?max_ord ?max_count k1 =
+    let mini =
+      match min_ord with
+      | None -> ""
+      | Some x -> sprintf " and ord>=%s" (esc_ord x)
+    in
+    let maxi =
+      match max_ord with
+      | None -> ""
+      | Some x -> sprintf " and ord<=%s" (esc_ord x)
+    in
+    let order =
+      match direction with
+      | `Asc -> " order by ord asc"
+      | `Desc -> " order by ord desc"
+    in
+    let limit =
+      match max_count with
+      | None -> ""
+      | Some x -> sprintf " limit %d" x
+    in
     let st =
-      sprintf "select k2, v, ord from %s where k1='%s';"
-        esc_tblname (esc_key1 k1)
+      sprintf "select k2, v, ord from %s where k1='%s'%s%s%s%s;"
+        esc_tblname
+        (esc_key1 k1)
+        mini
+        maxi
+        order
+        limit
     in
     Mysql_lwt.mysql_exec st (fun x ->
       let res = Mysql_lwt.unwrap_result x in

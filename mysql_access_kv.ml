@@ -50,7 +50,7 @@ sig
 
   val update :
     key ->
-    ((value * ord) option -> (value option * 'a) Lwt.t) ->
+    (value option -> (value option * 'a) Lwt.t) ->
     'a Lwt.t
     (* Set a write lock on the table/key pair,
        read the value and write the new value
@@ -60,10 +60,16 @@ sig
 
   val update_exn :
     key ->
-    ((value * ord) -> (value option * 'a) Lwt.t) ->
+    (value -> (value option * 'a) Lwt.t) ->
     'a Lwt.t
     (* Same as [update] but raises an exception if the value does
        not exist initially. *)
+
+  val update_full :
+    key ->
+    ((value * ord) option -> (value option * 'a) Lwt.t) ->
+    'a Lwt.t
+    (* Same as [update] but [ord] is also passed to the callback function *)
 
   val create_exn : key -> value -> unit Lwt.t
     (* Same as [update] but raises an exception if a value already exists. *)
@@ -234,7 +240,7 @@ struct
   let lock k f =
     Redis_mutex.with_mutex (mutex_name k) f
 
-  let update k f =
+  let update_full k f =
     lock k (fun () ->
       get_full k >>= fun opt_v_ord ->
       f opt_v_ord >>= fun (opt_v', result) ->
@@ -251,16 +257,22 @@ struct
       return result
     )
 
+  let update k f =
+    update_full k (function
+      | None -> f None
+      | Some (v, ord) -> f (Some v)
+    )
+
   let update_exn k f =
     lock k (fun () ->
       get_full k >>= function
       | None -> key_not_found k
-      | Some v_ord ->
-          f v_ord >>= fun (opt_v', result) ->
+      | Some (v, ord) ->
+          f v >>= fun (opt_v', result) ->
           (match opt_v' with
            | None -> return ()
            | Some v' ->
-               let ord' = update_ord k v' (snd v_ord) in
+               let ord' = update_ord k v' ord in
                unprotected_put k v' ord'
           ) >>= fun () ->
           return result
