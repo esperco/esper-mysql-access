@@ -13,7 +13,7 @@ let db_settings () =
     Mysql.dbhost = Some conf.Config_t.db_host;
     dbname = Some conf.Config_t.db_name;
     dbport = None;
-    dbpwd = None;
+    dbpwd = conf.Config_t.db_password;
     dbuser = Some "root";
     dbsocket = None;
   }
