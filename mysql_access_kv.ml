@@ -41,6 +41,14 @@ sig
   val get_full : key -> (value * ord) option Lwt.t
     (* Same as [get] but returns the 'ord' field as well. *)
 
+  val get_page :
+    ?direction: Mysql_types.direction ->
+    ?min_ord: ord ->
+    ?max_ord: ord ->
+    ?max_count: int ->
+    unit -> (key * value * ord) list Lwt.t
+    (* Select entries based on the 'ord' column *)
+
   val put : key -> value -> unit Lwt.t
     (* Set the value associated with the key, overwriting the
        existing value if any. *)
@@ -95,8 +103,6 @@ sig
   (* testing only; not the authoritative copy for this schema *)
   val create_table : unit -> unit Lwt.t
 
-  val get_all : unit -> (value * ord) list Lwt.t
-    (* Get all entries in the table, which can be a lot. *)
 end
 
 
@@ -176,17 +182,63 @@ struct
       | None -> key_not_found key
       | Some x -> return x
 
-  let get_all () =
+  let get_page
+      ?(direction = `Asc)
+      ?min_ord
+      ?max_ord
+      ?max_count
+      () =
+
+    let mini =
+      match min_ord with
+      | None -> None
+      | Some x -> Some (sprintf "ord>=%s" (esc_ord x))
+    in
+    let maxi =
+      match max_ord with
+      | None -> None
+      | Some x -> Some (sprintf "ord<=%s" (esc_ord x))
+    in
+    let order =
+      match direction with
+      | `Asc -> " order by ord asc"
+      | `Desc -> " order by ord desc"
+    in
+    let limit =
+      match max_count with
+      | None -> ""
+      | Some x -> sprintf " limit %d" x
+    in
+    let where =
+      let l = BatList.filter_map (fun o -> o) [mini; maxi] in
+      match l with
+      | [] -> ""
+      | l -> " where " ^ String.concat " and " l
+    in
     let st =
-      sprintf "select v, ord from %s;" esc_tblname
+      sprintf "select k, v, ord from %s%s%s%s;"
+        esc_tblname
+        where
+        order
+        limit
     in
     Mysql_lwt.mysql_exec st (fun x ->
       let res = Mysql_lwt.unwrap_result x in
       let rows = Mysql_util.fetch_all res in
       BatList.filter_map (function
-        | [| Some v; Some ord |] ->
-            (try Some (Param.Value.of_string v, ord_of_string ord)
-             with _ -> None)
+        | [| Some k; Some v; Some ord |] ->
+            (try Some (Param.Key.of_string v,
+                       Param.Value.of_string v,
+                       ord_of_string ord)
+             with e ->
+                 let msg = Log.string_of_exn e in
+                 Log.logf `Error "Malformed row data in table %s: \
+                              k=%s v=%s ord=%s exception: %s"
+                   tblname
+                   k v ord
+                   msg;
+                 None
+            )
         |  _ -> failwith ("Broken result returned on: " ^ st)
         ) rows
     )

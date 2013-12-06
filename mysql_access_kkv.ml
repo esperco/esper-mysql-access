@@ -182,11 +182,20 @@ struct
     Mysql_lwt.mysql_exec st (fun x ->
       let res = Mysql_lwt.unwrap_result x in
       let rows = Mysql_util.fetch_all res in
-      BatList.map (function
+      BatList.filter_map (function
         | [| Some k2; Some v; Some ord |] ->
-            (Param.Key2.of_string k2,
-             Param.Value.of_string v,
-             ord_of_string ord)
+            (try Some (Param.Key2.of_string k2,
+                       Param.Value.of_string v,
+                       ord_of_string ord)
+             with e ->
+                 let msg = Log.string_of_exn e in
+                 Log.logf `Error "Malformed row data in table %s: \
+                              k1=%s k2=%s v=%s ord=%s exception: %s"
+                   tblname
+                   (Param.Key1.to_string k1) k2 v ord
+                   msg;
+                 None
+            )
         |  _ -> failwith ("Broken result returned on: " ^ st)
       ) rows
     )
