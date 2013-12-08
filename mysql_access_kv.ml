@@ -227,7 +227,7 @@ struct
       let rows = Mysql_util.fetch_all res in
       BatList.filter_map (function
         | [| Some k; Some v; Some ord |] ->
-            (try Some (Param.Key.of_string v,
+            (try Some (Param.Key.of_string k,
                        Param.Value.of_string v,
                        ord_of_string ord)
              with e ->
