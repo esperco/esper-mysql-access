@@ -12,6 +12,7 @@ sig
   module Key1 : Mysql_types.Serializable
   module Key2 : Mysql_types.Serializable
   module Ord : Mysql_types.Numeric
+  val create_ord : Key1.t -> Key2.t -> Ord.t
 end
 
 module type KK =
@@ -21,10 +22,14 @@ sig
   type key2
   type ord
 
+  val create_ord : key1 -> key2 -> ord
+
   (* Operations on multiple elements *)
 
   (* TODO: implement get2 *)
   (* TODO: rename or implement same functions as for KV and KKV *)
+  (* TODO: support a 'v' column *)
+  (* TODO: support proper locking and update *)
 
   val get1 :
     ?direction: Mysql_types.direction ->
@@ -38,7 +43,7 @@ sig
 
   val get_ord : key1 -> key2 -> ord option Lwt.t
   val exists : key1 -> key2 -> bool Lwt.t
-  val add : key1 -> key2 -> ord -> unit Lwt.t
+  val put : key1 -> key2 -> unit Lwt.t
   val remove : key1 -> key2 -> unit Lwt.t
 
   (**/**)
@@ -61,6 +66,7 @@ struct
   type key2 = Param.Key2.t
   type ord = Param.Ord.t
   let tblname = Param.tblname
+  let create_ord = Param.create_ord
 
   let esc_tblname = Mysql.escape tblname
   let esc_key1 key = Mysql.escape (Param.Key1.to_string key)
@@ -129,7 +135,8 @@ struct
       | None -> return false
       | Some _ -> return true
 
-  let add k1 k2 ord =
+  let put k1 k2 =
+    let ord = create_ord k1 k2 in
     let st =
       sprintf "\
 replace into %s (k1, k2, ord) values ('%s', '%s', %s);
@@ -190,6 +197,7 @@ let test () =
     module Key1 = Int_key
     module Key2 = Int_key
     module Ord = Util_time
+    let create_ord k1 k2 = Util_time.now ()
   end
   in
   let module Testset = Make (Param) in
@@ -204,7 +212,7 @@ let test () =
       14, (Util_time.of_float 4.);
     ] in
     Lwt_list.iter_s (fun (k2, ord) ->
-      Testset.add k1 k2 ord
+      Testset.put k1 k2
     ) l1 >>= fun () ->
     Testset.get1 k1 >>= fun l1' ->
     assert (List.sort compare l1' = List.sort compare l1);
