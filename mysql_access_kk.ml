@@ -215,7 +215,8 @@ let test () =
       Testset.put k1 k2
     ) l1 >>= fun () ->
     Testset.get1 k1 >>= fun l1' ->
-    assert (List.sort compare l1' = List.sort compare l1);
+    let normalize l = List.sort compare (List.map fst l) in
+    assert (normalize l1' = normalize l1);
     return true
   )
 
