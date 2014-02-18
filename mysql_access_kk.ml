@@ -37,7 +37,7 @@ sig
     ?min_ord: ord ->
     ?max_ord: ord ->
     ?max_count: int ->
-    key1 -> (key2 * value option * ord) list Lwt.t
+    key1 -> (key2 * value * ord) list Lwt.t
     (* return all elements of a set, sorted by 'ord' *)
 
   (* Operations on a single element *)
@@ -115,9 +115,9 @@ struct
       let res = Mysql_lwt.unwrap_result x in
       let rows = Mysql_util.fetch_all res in
       BatList.map (function
-        | [| Some k2; maybe_v; Some ord |] ->
-            let maybe_v_str = BatOption.map Param.Value.of_string maybe_v in
-            (Param.Key2.of_string k2, maybe_v_str, ord_of_string ord)
+        | [| Some k2; Some v; Some ord |] ->
+            let v_str = Param.Value.of_string maybe_v in
+            (Param.Key2.of_string k2, v_str, ord_of_string ord)
         |  _ -> failwith ("Broken result returned on: " ^ st)
       ) rows
     )
