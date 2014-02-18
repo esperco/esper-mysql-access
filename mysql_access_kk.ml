@@ -116,7 +116,7 @@ struct
       let rows = Mysql_util.fetch_all res in
       BatList.map (function
         | [| Some k2; Some v; Some ord |] ->
-            let v_str = Param.Value.of_string maybe_v in
+            let v_str = Param.Value.of_string v in
             (Param.Key2.of_string k2, v_str, ord_of_string ord)
         |  _ -> failwith ("Broken result returned on: " ^ st)
       ) rows
