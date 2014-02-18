@@ -30,7 +30,6 @@ sig
 
   (* TODO: implement get2 *)
   (* TODO: rename or implement same functions as for KV and KKV *)
-  (* TODO: support a 'v' column *)
   (* TODO: support proper locking and update *)
 
   val get1 :
@@ -45,7 +44,7 @@ sig
 
   val get_ord : key1 -> key2 -> ord option Lwt.t
   val exists : key1 -> key2 -> bool Lwt.t
-  val put : key1 -> key2 -> value option -> unit Lwt.t
+  val put : key1 -> key2 -> value -> unit Lwt.t
   val remove : key1 -> key2 -> unit Lwt.t
 
   (**/**)
@@ -75,9 +74,7 @@ struct
   let esc_tblname = Mysql.escape tblname
   let esc_key1 key = Mysql.escape (Param.Key1.to_string key)
   let esc_key2 key = Mysql.escape (Param.Key2.to_string key)
-  let esc_value = function
-    | None -> "null"
-    | Some value -> "'" ^ Mysql.escape (Param.Value.to_string value) ^ "'"
+  let esc_value value = Mysql.escape (Param.Value.to_string value)
   let esc_ord ord =
     Mysql_types.ord_of_float (Param.Ord.to_float ord)
 
@@ -147,7 +144,7 @@ struct
     let ord = create_ord k1 k2 in
     let st =
       sprintf "\
-replace into %s (k1, k2, v, ord) values ('%s', '%s', %s, %s);
+replace into %s (k1, k2, v, ord) values ('%s', '%s', '%s', %s);
 "
         esc_tblname (esc_key1 k1) (esc_key2 k2) (esc_value v) (esc_ord ord)
     in
@@ -176,8 +173,8 @@ create table if not exists %s (
        k2 varchar(767) character set ascii not null,
          -- identifies an element of the set
          -- (unique within the set but not within the table)
-       v blob,
-         -- optional value associated with the (k1, k2) pair
+       v blob not null,
+         -- value associated with the (k1, k2) pair
        ord double not null,
          -- ordering, typically a timestamp
 
@@ -223,7 +220,7 @@ let test () =
       14, "four", (Util_time.of_float 4.);
     ] in
     Lwt_list.iter_s (fun (k2, v, ord) ->
-      Testset.put k1 k2 (Some v)
+      Testset.put k1 k2 v
     ) l1 >>= fun () ->
     Testset.get1 k1 >>= fun l1' ->
     let normalize l = List.sort compare (List.map (fun (k2, _, _) -> k2) l) in
