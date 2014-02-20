@@ -42,7 +42,7 @@ sig
 
   (* Operations on a single element *)
 
-  val get_ord : key1 -> key2 -> ord option Lwt.t
+  val get_ord : key1 -> key2 -> (value * ord) option Lwt.t
   val exists : key1 -> key2 -> bool Lwt.t
   val put : key1 -> key2 -> value -> unit Lwt.t
   val remove : key1 -> key2 -> unit Lwt.t
@@ -124,13 +124,15 @@ struct
 
   let get_ord k1 k2 =
     let st =
-      sprintf "select ord from %s where k1='%s' and k2='%s';"
+      sprintf "select v, ord from %s where k1='%s' and k2='%s';"
         esc_tblname (esc_key1 k1) (esc_key2 k2)
     in
     Mysql_lwt.mysql_exec st (fun x ->
       let res = Mysql_lwt.unwrap_result x in
       match Mysql.fetch res with
-        | Some [| Some ord |] -> Some (Param.Ord.of_float (float_of_string ord))
+        | Some [| Some v; Some ord |] ->
+            let v_str = Param.Value.of_string v in
+            Some (v_str, Param.Ord.of_float (float_of_string ord))
         | None -> None
         |  _ -> failwith ("Broken result returned on: " ^ st)
     )
