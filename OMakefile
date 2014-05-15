@@ -6,7 +6,7 @@ FILES[] =
   mysql_lwt
   mysql_access_kv
   mysql_access_kkv
-  mysql_access_kk
+  mysql_access_k2v
   mysql_access_util
 
 OCamlLibrary(mysql-access, $(FILES))

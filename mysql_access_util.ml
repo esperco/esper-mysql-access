@@ -3,12 +3,12 @@
   Mysql_access_*.Make functors.
 *)
 
-module Ignore = struct
+(* Empty JSON object allowing future optional fields
+   without breaking compatibility *)
+module Unit = struct
   type t = unit
-  let to_string () = ""
+  let to_string () = "{}"
   let of_string s = ()
-  let to_float () = 0.
-  let of_float x = ()
 end
 
 module String = struct

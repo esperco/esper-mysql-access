@@ -37,7 +37,6 @@ module KKV = struct
   let last_modified = Some (fun k1 k2 v ord -> Util_time.now ())
 end
 
-module KK = struct
-  let created k1 k2 = Util_time.now ()
-  let last_modified = Some (fun k1 k2 ord -> Util_time.now ())
+module K2V = struct
+  let created k1 k2 v = Util_time.now ()
 end
