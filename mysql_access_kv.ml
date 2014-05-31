@@ -332,8 +332,9 @@ struct
 
   let create_exn k v =
     update k (function
-    | None -> return (Some v, ())
-    | Some _ -> key_exists k)
+      | None -> return (Some v, ())
+      | Some _ -> key_exists k
+    )
 
   let put k v =
     update k (function _old ->
