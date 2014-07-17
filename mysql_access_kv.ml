@@ -352,7 +352,7 @@ struct
       sprintf "\
 create table if not exists %s (
        k varchar(767) character set ascii not null,
-       v blob not null,
+       v longblob not null,
        ord double not null,
 
        primary key (k),

@@ -191,14 +191,9 @@ replace into %s (k1, k2, v, ord) values ('%s', '%s', '%s', %s);
       sprintf "\
 create table if not exists %s (
        k1 varchar(767) character set ascii not null,
-         -- identifies the set
        k2 varchar(767) character set ascii not null,
-         -- identifies an element of the set
-         -- (unique within the set but not within the table)
        v longblob not null,
-         -- value, often JSON
        ord double not null,
-         -- ordering, typically a timestamp
 
        primary key (k1, k2),
        index (k1),
