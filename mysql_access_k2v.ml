@@ -30,11 +30,36 @@ sig
   val get : key1 -> key2 -> (value * ord) option Lwt.t
   val exists : key1 -> key2 -> bool Lwt.t
   val put : key1 -> key2 -> value -> unit Lwt.t
-  val remove : key1 -> key2 -> unit Lwt.t
+  val delete : key1 -> key2 -> unit Lwt.t
 
   (* Operations on multiple elements *)
 
-  (* TODO: support proper locking and update *)
+  val to_stream :
+    ?page_size: int ->
+    unit -> (key1 * key2 * value * ord) Lwt_stream.t
+    (* get all entries in the table, page by page.
+       page_size is the number of items to fetch in one mysql query
+       (default: 1000)
+    *)
+
+  val to_list :
+    ?page_size: int ->
+    unit -> (key1 * key2 * value * ord) list Lwt.t
+    (* get all entries in the table as a list.
+       Not recommended on large tables.
+    *)
+
+  val iter :
+    ?page_size: int ->
+    ?max_threads: int ->
+    ((key1 * key2 * value * ord) -> unit Lwt.t) ->
+    unit Lwt.t
+    (* iterate over all entries in the table sequentially.
+       page_size is the number of items to fetch in one mysql query
+       (default: 1000).
+       max_threads is the maximum number of items to process in parallel
+       (default: 1, i.e. sequential processing is the default).
+    *)
 
   val get1 :
     ?direction: Mysql_types.direction ->
@@ -84,6 +109,83 @@ struct
 
   let ord_of_string s =
     Param.Ord.of_float (float_of_string s)
+
+  type page = (key1 * key2 * value * ord) list
+
+  (* This type definition is purely so that we don't have to
+     use the -rectypes compiler option. *)
+  type get_page = Get_page of (unit -> (page * get_page) option Lwt.t)
+
+  let rec get_page ?after ?max_count (): (page * get_page) option Lwt.t =
+    let where =
+      match after with
+      | None -> ""
+      | Some (k1, k2) ->
+          let k1_s = esc_key1 k1 in
+          let k2_s = esc_key2 k2 in
+          sprintf " where k1 = '%s' and k2 > '%s' or k1 > '%s'"
+            k1_s k2_s k1_s
+    in
+    let limit =
+      match max_count with
+      | None -> ""
+      | Some n when n > 0 -> sprintf " limit %d" n
+      | Some n -> invalid_arg (sprintf "get_page ~max_count:%d" n)
+    in
+    let st =
+      sprintf "select k1, k2, v, ord from %s%s order by k1, k2 asc%s;"
+        esc_tblname
+        where
+        limit
+    in
+    Mysql_lwt.mysql_exec st (fun x ->
+      let res = Mysql_lwt.unwrap_result x in
+      let rows = Mysql_util.fetch_all res in
+      let page =
+        BatList.map (function
+          | [| Some k1; Some k2; Some v; Some ord |] ->
+              (Param.Key1.of_string k1, Param.Key2.of_string k2,
+               Param.Value.of_string v, ord_of_string ord)
+          |  _ -> failwith ("Broken result returned on: " ^ st)
+        ) rows
+      in
+      match page with
+      | [] -> None
+      | l ->
+          let k1, k2, _, _ = BatList.last l in
+          Some (page,
+                Get_page (fun () -> get_page ~after:(k1, k2) ?max_count ()))
+    )
+
+  let to_stream ?(page_size = 1000) () =
+    let q = Queue.create () in
+    let get_next_page = ref (
+      fun () -> get_page ~max_count:page_size ()
+    ) in
+    let rec get_next_item () =
+      if Queue.is_empty q then
+        (* refill queue *)
+        !get_next_page () >>= function
+        | None ->
+            get_next_page := (fun () -> assert false);
+            return None
+        | Some (page, Get_page get_next) ->
+            assert (page <> []);
+            List.iter (fun x -> Queue.add x q) page;
+            get_next_page := get_next;
+            (* retry read from queue *)
+            get_next_item ()
+      else
+        return (Some (Queue.take q))
+    in
+    Lwt_stream.from get_next_item
+
+  let iter ?page_size ?(max_threads = 1) f =
+    let stream = to_stream ?page_size () in
+    Util_lwt.iter_stream max_threads stream f
+
+  let to_list ?page_size () =
+    Lwt_stream.to_list (to_stream ?page_size ())
 
   let get_list
       k1_name k1_to_esc
@@ -175,7 +277,7 @@ replace into %s (k1, k2, v, ord) values ('%s', '%s', '%s', %s);
       ()
     )
 
-  let remove k1 k2 =
+  let delete k1 k2 =
     let st =
       sprintf "delete from %s where k1='%s' and k2='%s';"
         esc_tblname (esc_key1 k1) (esc_key2 k2)
