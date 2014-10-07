@@ -7,6 +7,11 @@ open Log
 open Printf
 open Lwt
 
+(*
+   Optional logging of debug information.
+*)
+let debug_logger = ref ignore
+
 let db_settings () =
   let conf = Config.get () in
   {
@@ -99,6 +104,7 @@ let unwrap_result (x : exec_result) : Mysql.result =
     | Error s -> failwith s
 
 let mysql_exec statement handler =
+  !debug_logger statement;
   call (fun env ->
     let exec_result =
       try
