@@ -39,12 +39,30 @@ sig
     *)
 
   val get1 :
-    ?direction: Mysql_types.direction ->
+    ?ord_direction: Mysql_types.direction ->
+    ?key2_direction: Mysql_types.direction ->
+    ?xstart_key2: key2 ->
     ?min_ord: ord ->
     ?max_ord: ord ->
     ?max_count: int ->
     key1 -> (key2 * value * ord) list Lwt.t
-    (* Get the values associated with the key. *)
+    (*
+       Get the values associated with the key, sorted by 'ord'
+       then by 'key2'.
+       If specified, 'xstart_key2' is the key after which the requested
+       selection must start. It is intended for paging.
+    *)
+
+  val get1_page :
+    ?ord_direction: Mysql_types.direction ->
+    ?key2_direction: Mysql_types.direction ->
+    ?xstart_key2: key2 ->
+    ?min_ord: ord ->
+    ?max_ord: ord ->
+    ?max_count: int ->
+    key1 -> ((key2 * value * ord) list * key2 option) Lwt.t
+    (* Same as get1; returns the key to next page 'xstart_key2'
+       for convenience *)
 
   val get2 : key2 -> (key1 * value * ord) option Lwt.t
     (* Get the value associated with the key if it exists. *)
@@ -66,7 +84,13 @@ sig
     ?max_ord: ord ->
     ?max_count: int ->
     unit -> (key1 * key2 * value * ord) list Lwt.t
-    (* Select entries based on the 'ord' column *)
+    (* Select entries based on the 'ord' column.
+
+       Note this is not ideal since 'ord' values are not guaranteed
+       to be unique. If more than 'max_count' of them have the same
+       values, some rows won't be retrievable with this function.
+       Use get1_page for a better behavior.
+    *)
 
   val update :
     key2 ->
@@ -157,7 +181,16 @@ struct
     failwith (sprintf "Key '%s' not found in table '%s'"
                 (esc_key2 key2) esc_tblname)
 
-  let get1 ?(direction = `Asc) ?min_ord ?max_ord ?max_count k1 =
+  let string_of_dir = function
+    | `Asc -> "asc"
+    | `Desc -> "desc"
+
+  let get1
+      ?(ord_direction = `Asc)
+      ?(key2_direction = `Asc)
+      ?xstart_key2
+      ?min_ord ?max_ord ?max_count
+      k1 =
     let mini =
       match min_ord with
       | None -> ""
@@ -168,10 +201,16 @@ struct
       | None -> ""
       | Some x -> sprintf " and ord<=%s" (esc_ord x)
     in
+    let xstart =
+      match key2_direction, xstart_key2 with
+      | _, None -> ""
+      | `Asc, Some k2 -> sprintf " and k2>'%s'" (esc_key2 k2)
+      | `Desc, Some k2 -> sprintf " and k2<'%s'" (esc_key2 k2)
+    in
     let order =
-      match direction with
-      | `Asc -> " order by ord asc"
-      | `Desc -> " order by ord desc"
+      sprintf " order by ord %s, k2 %s"
+        (string_of_dir ord_direction)
+        (string_of_dir key2_direction)
     in
     let limit =
       match max_count with
@@ -179,11 +218,12 @@ struct
       | Some x -> sprintf " limit %d" x
     in
     let st =
-      sprintf "select k2, v, ord from %s where k1='%s'%s%s%s%s;"
+      sprintf "select k2, v, ord from %s where k1='%s'%s%s%s%s%s;"
         esc_tblname
         (esc_key1 k1)
         mini
         maxi
+        xstart
         order
         limit
     in
@@ -224,6 +264,28 @@ struct
         | Some _ -> failwith ("Broken result returned on: " ^ st)
       )
     )
+
+  let get1_page
+      ?ord_direction
+      ?key2_direction
+      ?xstart_key2
+      ?min_ord ?max_ord ?max_count
+      k1 =
+    get1
+      ?ord_direction
+      ?key2_direction
+      ?xstart_key2
+      ?min_ord ?max_ord ?max_count
+      k1 >>= fun l ->
+    let next =
+      match max_count with
+      | Some m when List.length l < m -> None
+      | _ ->
+          match BatList.Exceptionless.last l with
+          | None -> None
+          | Some (k2, v, ord) -> Some k2
+    in
+    return (l, next)
 
   let mget2 keys =
     match keys with
