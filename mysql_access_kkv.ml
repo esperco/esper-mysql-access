@@ -38,10 +38,6 @@ sig
        (currently embedded in file 'create-kv-tbl.sql')
     *)
 
-  val count1 : ?ord: ord -> key1 -> int Lwt.t
-    (* Count number of entries under key1.
-       Also restricted to ord if it is specified. *)
-
   val get1 :
     ?ord_direction: Mysql_types.direction ->
     ?key2_direction: Mysql_types.direction ->
@@ -182,23 +178,6 @@ struct
   let gt_of_dir = function
     | `Asc -> ">"
     | `Desc -> "<"
-
-  let count1
-      ?ord
-      k1 =
-    let cond_ord =
-      match ord with
-      | Some x -> " and ord=" ^ esc_ord x
-      | None   -> "" in
-    let st =
-      sprintf "select count(*) from %s where k1='%s'%s"
-        esc_tblname (esc_key1 k1) cond_ord
-    in
-    Mysql_lwt.mysql_exec st (fun x ->
-      match Mysql.fetch (Mysql_lwt.unwrap_result x) with
-      | Some [| Some n |] -> int_of_string n
-      | _ -> failwith ("Broken result returned on: " ^ st)
-    )
 
   let get1
       ?(ord_direction = `Asc)
@@ -504,10 +483,6 @@ let test_kkv_basic_operations () =
     assert (v3' = v3);
     Testkkv.get1 k1 >>= fun l ->
     assert (List.length l = 2);
-    Testkkv.count1 k1 >>= fun n ->
-    assert (n = 2);
-    Testkkv.count1 ~ord:ord' k1 >>= fun n ->
-    assert (n = 1);
     Testkkv.unprotected_delete2 k21 >>= fun () ->
     Testkkv.get2 k21 >>= fun opt_v ->
     assert (opt_v = None);

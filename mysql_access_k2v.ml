@@ -30,6 +30,7 @@ sig
   val get : key1 -> key2 -> (value * ord) option Lwt.t
   val exists : key1 -> key2 -> bool Lwt.t
   val put : key1 -> key2 -> value -> unit Lwt.t
+  val put_if_new : key1 -> key2 -> value -> unit Lwt.t
   val delete : key1 -> key2 -> unit Lwt.t
 
   (* Operations on multiple elements *)
@@ -76,6 +77,10 @@ sig
     ?max_count: int ->
     key2 -> (key1 * value * ord) list Lwt.t
     (* return all elements having key2, sorted by 'ord' *)
+
+  val count1 : ?ord: ord -> key1 -> int Lwt.t
+    (* Count number of entries under key1.
+       Also restricted to ord if it is specified. *)
 
   (**/**)
   (* testing only; not the authoritative copy for this schema *)
@@ -259,23 +264,46 @@ struct
         |  _ -> failwith ("Broken result returned on: " ^ st)
     )
 
+  let count1
+      ?ord
+      k1 =
+    let cond_ord =
+      match ord with
+      | Some x -> " and ord=" ^ esc_ord x
+      | None   -> "" in
+    let st =
+      sprintf "select count(*) from %s where k1='%s'%s"
+        esc_tblname (esc_key1 k1) cond_ord
+    in
+    Mysql_lwt.mysql_exec st (fun x ->
+      match Mysql.fetch (Mysql_lwt.unwrap_result x) with
+      | Some [| Some n |] -> int_of_string n
+      | _ -> failwith ("Broken result returned on: " ^ st)
+    )
+
   let exists k1 k2 =
     get k1 k2 >>= function
       | None -> return false
       | Some _ -> return true
 
-  let put k1 k2 v =
+  let put' verb k1 k2 v =
     let ord = Param.create_ord k1 k2 v in
     let st =
       sprintf "\
-replace into %s (k1, k2, v, ord) values ('%s', '%s', '%s', %s);
+%s into %s (k1, k2, v, ord) values ('%s', '%s', '%s', %s);
 "
-        esc_tblname (esc_key1 k1) (esc_key2 k2) (esc_value v) (esc_ord ord)
+        verb esc_tblname (esc_key1 k1) (esc_key2 k2) (esc_value v) (esc_ord ord)
     in
     Mysql_lwt.mysql_exec st (fun x ->
       let _res = Mysql_lwt.unwrap_result x in
       ()
     )
+
+  let put k1 k2 v =
+    put' "replace" k1 k2 v
+
+  let put_if_new k1 k2 v =
+    put' "insert ignore" k1 k2 v
 
   let delete k1 k2 =
     let st =
@@ -349,6 +377,9 @@ let test () =
 
     Testset.get2 12 >>= fun l2 ->
     assert (normalize l2 = [k1, 22]);
+
+    Testset.count1 1 >>= fun n ->
+    assert (n = List.length l1);
 
     return true
   )
