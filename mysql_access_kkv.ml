@@ -38,6 +38,14 @@ sig
        (currently embedded in file 'create-kv-tbl.sql')
     *)
 
+  val get_page :
+    ?direction: Mysql_types.direction ->
+    ?min_ord: ord ->
+    ?max_ord: ord ->
+    ?max_count: int ->
+    unit -> (key1 * key2 * value * ord) list Lwt.t
+    (* Select entries based on the 'ord' column *)
+
   val get1 :
     ?ord_direction: Mysql_types.direction ->
     ?key2_direction: Mysql_types.direction ->
@@ -178,6 +186,68 @@ struct
   let gt_of_dir = function
     | `Asc -> ">"
     | `Desc -> "<"
+
+  let get_page
+      ?(direction = `Asc)
+      ?min_ord
+      ?max_ord
+      ?max_count
+      () =
+
+    let mini =
+      match min_ord with
+      | None -> None
+      | Some x -> Some (sprintf "ord>=%s" (esc_ord x))
+    in
+    let maxi =
+      match max_ord with
+      | None -> None
+      | Some x -> Some (sprintf "ord<=%s" (esc_ord x))
+    in
+    let order =
+      match direction with
+      | `Asc -> " order by ord asc"
+      | `Desc -> " order by ord desc"
+    in
+    let limit =
+      match max_count with
+      | None -> ""
+      | Some x -> sprintf " limit %d" x
+    in
+    let where =
+      let l = BatList.filter_map (fun o -> o) [mini; maxi] in
+      match l with
+      | [] -> ""
+      | l -> " where " ^ String.concat " and " l
+    in
+    let st =
+      sprintf "select k1, k2, v, ord from %s%s%s%s;"
+        esc_tblname
+        where
+        order
+        limit
+    in
+    Mysql_lwt.mysql_exec st (fun x ->
+      let res = Mysql_lwt.unwrap_result x in
+      let rows = Mysql_util.fetch_all res in
+      BatList.filter_map (function
+        | [| Some k1; Some k2; Some v; Some ord |] ->
+            (try Some (Param.Key1.of_string k1,
+                       Param.Key2.of_string k2,
+                       Param.Value.of_string v,
+                       ord_of_string ord)
+             with e ->
+                 let msg = Log.string_of_exn e in
+                 Log.logf `Error "Malformed row data in table %s: \
+                              k1=%s k2=%s v=%s ord=%s exception: %s"
+                   tblname
+                   k1 k2 v ord
+                   msg;
+                 None
+            )
+        |  _ -> failwith ("Broken result returned on: " ^ st)
+        ) rows
+    )
 
   let get1
       ?(ord_direction = `Asc)
