@@ -373,9 +373,10 @@ struct
     match keys with
         [] -> return []
       | _ ->
+          let keys_s = BatList.map esc_key2 keys in
           let w =
             String.concat " or "
-              (BatList.map (fun k -> sprintf "k2='%s'" (esc_key2 k)) keys)
+              (BatList.map (fun k_s -> sprintf "k2='%s'" k_s) keys_s)
           in
           let st =
             sprintf "select k1, k2, v, ord from %s where %s;" esc_tblname w
@@ -383,14 +384,19 @@ struct
           Mysql_lwt.mysql_exec st (fun x ->
             let res = Mysql_lwt.unwrap_result x in
             let rows = Mysql_util.fetch_all res in
-            BatList.map (function
-              | [| Some k1; Some k2; Some v; Some ord |] ->
-                  (Param.Key1.of_string k1,
-                   Param.Key2.of_string k2,
-                   Param.Value.of_string v,
-                   ord_of_string ord)
-              |  _ -> failwith ("Broken result returned on: " ^ st)
-            ) rows
+            let unordered =
+              BatList.map (function
+                | [| Some k1; Some k2; Some v; Some ord |] ->
+                    (k2, (Param.Key1.of_string k1,
+                          Param.Key2.of_string k2,
+                          Param.Value.of_string v,
+                          ord_of_string ord)
+                    )
+                |  _ -> failwith ("Broken result returned on: " ^ st)
+              ) rows
+            in
+            let ordered = Mysql_util.reorder keys_s unordered fst in
+            BatList.map snd ordered
           )
 
   let get2_exn key =
