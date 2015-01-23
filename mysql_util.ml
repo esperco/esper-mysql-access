@@ -27,3 +27,25 @@ let reorder key_sequence values get_key =
   let cmp (i, _) (j, _) = compare i j in
   Array.fast_sort cmp a;
   Array.to_list (Array.map snd a)
+
+let test_reorder () =
+  let keys = [ "once"; "upon"; "a"; "time"; "once" ] in
+  let values = [
+    (0, "upon");
+    (0, "time");
+    (0, "once");
+    (0, "upon");
+  ] in
+  let get_key (_, s) = s in
+  let expected = [
+    (0, "once");
+    (0, "upon");
+    (0, "upon");
+    (0, "time");
+  ] in
+  let result = reorder keys values get_key in
+  result = expected
+
+let tests = [
+  "reorder", test_reorder;
+]
