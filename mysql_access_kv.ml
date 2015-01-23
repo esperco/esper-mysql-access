@@ -54,7 +54,7 @@ sig
        existing value if any. *)
 
   val mget : key list -> (key * value * ord) list Lwt.t
-    (* Get multiple values *)
+    (* Get multiple values. Key order is preserved. *)
 
   val update :
     key ->

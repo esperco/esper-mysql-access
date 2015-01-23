@@ -80,7 +80,7 @@ sig
        replacing the existing row if any. *)
 
   val mget2 : key2 list -> (key1 * key2 * value * ord) list Lwt.t
-    (* Get multiple values *)
+    (* Get multiple values. Key order is preserved. *)
 
   val get2_exn : key2 -> (key1 * value * ord) Lwt.t
     (* Get the value associated with the key, raising an exception
