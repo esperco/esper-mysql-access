@@ -95,10 +95,10 @@ let call user_f =
 (*****)
 
 type exec_result =
-    Result of Mysql.result
+    Result of (Mysql.result * int64(*rows affected*) )
   | Error of string
 
-let unwrap_result (x : exec_result) : Mysql.result =
+let unwrap_result (x : exec_result) : Mysql.result * int64 =
   match x with
       Result y -> y
     | Error s -> failwith s
@@ -111,7 +111,7 @@ let mysql_exec statement handler =
         let dbd = get_connection env.dbd_ref in
         let result = Mysql.exec dbd statement in
         match Mysql.errmsg dbd with
-            None -> Result result
+            None -> Result (result, Mysql.affected dbd)
           | Some s -> Error ("mysql error " ^ s)
       with e ->
         match e with

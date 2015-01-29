@@ -228,7 +228,7 @@ struct
         limit
     in
     Mysql_lwt.mysql_exec st (fun x ->
-      let res = Mysql_lwt.unwrap_result x in
+      let res, _affected = Mysql_lwt.unwrap_result x in
       let rows = Mysql_util.fetch_all res in
       BatList.filter_map (function
         | [| Some k1; Some k2; Some v; Some ord |] ->
@@ -305,7 +305,7 @@ struct
         limit
     in
     Mysql_lwt.mysql_exec st (fun x ->
-      let res = Mysql_lwt.unwrap_result x in
+      let res, _affected = Mysql_lwt.unwrap_result x in
       let rows = Mysql_util.fetch_all res in
       BatList.filter_map (function
         | [| Some k2; Some v; Some ord |] ->
@@ -331,7 +331,7 @@ struct
         esc_tblname (esc_key2 key)
     in
     Mysql_lwt.mysql_exec st (fun x ->
-      let res = Mysql_lwt.unwrap_result x in
+      let res, _affected = Mysql_lwt.unwrap_result x in
       (match Mysql.fetch res with
           Some [| Some k1; Some v; Some ord |] ->
             Some (Param.Key1.of_string k1,
@@ -382,7 +382,7 @@ struct
             sprintf "select k1, k2, v, ord from %s where %s;" esc_tblname w
           in
           Mysql_lwt.mysql_exec st (fun x ->
-            let res = Mysql_lwt.unwrap_result x in
+            let res, _affected = Mysql_lwt.unwrap_result x in
             let rows = Mysql_util.fetch_all res in
             let unordered =
               BatList.map (function

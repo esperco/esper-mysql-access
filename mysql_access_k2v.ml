@@ -30,7 +30,7 @@ sig
   val get : key1 -> key2 -> (value * ord) option Lwt.t
   val exists : key1 -> key2 -> bool Lwt.t
   val put : key1 -> key2 -> value -> unit Lwt.t
-  val put_if_new : key1 -> key2 -> value -> unit Lwt.t
+  val put_if_new : key1 -> key2 -> value -> bool Lwt.t
   val delete : key1 -> key2 -> unit Lwt.t
 
   (* Operations on multiple elements *)
@@ -144,7 +144,7 @@ struct
         limit
     in
     Mysql_lwt.mysql_exec st (fun x ->
-      let res = Mysql_lwt.unwrap_result x in
+      let res, _affected = Mysql_lwt.unwrap_result x in
       let rows = Mysql_util.fetch_all res in
       let page =
         BatList.map (function
@@ -228,7 +228,7 @@ struct
         limit
     in
     Mysql_lwt.mysql_exec st (fun x ->
-      let res = Mysql_lwt.unwrap_result x in
+      let res, _affected = Mysql_lwt.unwrap_result x in
       let rows = Mysql_util.fetch_all res in
       BatList.map (function
         | [| Some k2; Some v; Some ord |] ->
@@ -255,7 +255,7 @@ struct
         esc_tblname (esc_key1 k1) (esc_key2 k2)
     in
     Mysql_lwt.mysql_exec st (fun x ->
-      let res = Mysql_lwt.unwrap_result x in
+      let res, _affected = Mysql_lwt.unwrap_result x in
       match Mysql.fetch res with
         | Some [| Some v; Some ord |] ->
             Some (Param.Value.of_string v,
@@ -276,7 +276,7 @@ struct
         esc_tblname (esc_key1 k1) cond_ord
     in
     Mysql_lwt.mysql_exec st (fun x ->
-      match Mysql.fetch (Mysql_lwt.unwrap_result x) with
+      match Mysql.fetch (fst (Mysql_lwt.unwrap_result x)) with
       | Some [| Some n |] -> int_of_string n
       | _ -> failwith ("Broken result returned on: " ^ st)
     )
@@ -295,15 +295,16 @@ struct
         verb esc_tblname (esc_key1 k1) (esc_key2 k2) (esc_value v) (esc_ord ord)
     in
     Mysql_lwt.mysql_exec st (fun x ->
-      let _res = Mysql_lwt.unwrap_result x in
-      ()
+      let _res, affected = Mysql_lwt.unwrap_result x in
+      affected
     )
 
   let put k1 k2 v =
-    put' "replace" k1 k2 v
+    put' "replace" k1 k2 v >>= fun (_affected:int64) -> return ()
 
   let put_if_new k1 k2 v =
-    put' "insert ignore" k1 k2 v
+    put' "insert ignore" k1 k2 v >>= fun affected ->
+    return (affected > 0L)
 
   let delete k1 k2 =
     let st =
