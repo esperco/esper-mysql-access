@@ -291,7 +291,8 @@ struct
                     ?min_ord
                     ?xmin_ord
                     ?max_ord
-                    ?xmax_ord())
+                    ?xmax_ord
+                    ())
                )
     )
 
@@ -300,7 +301,8 @@ struct
       ?min_ord
       ?xmin_ord
       ?max_ord
-      ?xmax_ord () =
+      ?xmax_ord
+      () =
     let q = Queue.create () in
     let get_next_page = ref (
       fun () ->
@@ -359,7 +361,8 @@ struct
                           ?xmin_ord
                           ?max_ord
                           ?xmax_ord
-                          ())
+                          ()
+                       )
 
   let get1
       ?(ord_direction = `Asc)

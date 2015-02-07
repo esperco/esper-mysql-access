@@ -37,6 +37,10 @@ sig
 
   val to_stream :
     ?page_size: int ->
+    ?min_ord: ord ->
+    ?xmin_ord: ord ->
+    ?max_ord: ord ->
+    ?xmax_ord: ord ->
     unit -> (key1 * key2 * value * ord) Lwt_stream.t
     (* get all entries in the table, page by page.
        page_size is the number of items to fetch in one mysql query
@@ -45,6 +49,10 @@ sig
 
   val to_list :
     ?page_size: int ->
+    ?min_ord: ord ->
+    ?xmin_ord: ord ->
+    ?max_ord: ord ->
+    ?xmax_ord: ord ->
     unit -> (key1 * key2 * value * ord) list Lwt.t
     (* get all entries in the table as a list.
        Not recommended on large tables.
@@ -52,6 +60,10 @@ sig
 
   val iter :
     ?page_size: int ->
+    ?min_ord: ord ->
+    ?xmin_ord: ord ->
+    ?max_ord: ord ->
+    ?xmax_ord: ord ->
     ?max_threads: int ->
     ((key1 * key2 * value * ord) -> unit Lwt.t) ->
     unit Lwt.t
@@ -121,15 +133,40 @@ struct
      use the -rectypes compiler option. *)
   type get_page = Get_page of (unit -> (page * get_page) option Lwt.t)
 
-  let rec get_page ?after ?max_count (): (page * get_page) option Lwt.t =
-    let where =
+  let rec get_page
+      ?after
+      ?max_count
+      ?min_ord
+      ?xmin_ord
+      ?max_ord
+      ?xmax_ord (): (page * get_page) option Lwt.t =
+    let after_clause =
       match after with
-      | None -> ""
+      | None -> []
       | Some (k1, k2) ->
           let k1_s = esc_key1 k1 in
           let k2_s = esc_key2 k2 in
-          sprintf " where k1 = '%s' and k2 > '%s' or k1 > '%s'"
-            k1_s k2_s k1_s
+          [ sprintf "(k1 = '%s' and k2 > '%s' or k1 > '%s')" k1_s k2_s k1_s ]
+    in
+    let min_ord_clause =
+      match min_ord, xmin_ord with
+      | None, None -> []
+      | Some ord, None -> [ sprintf "ord >= %s" (esc_ord ord) ]
+      | _, Some ord -> [ sprintf "ord > %s" (esc_ord ord) ]
+    in
+    let max_ord_clause =
+      match max_ord, xmax_ord with
+      | None, None -> []
+      | Some ord, None -> [ sprintf "ord <= %s" (esc_ord ord) ]
+      | _, Some ord -> [ sprintf "ord < %s" (esc_ord ord) ]
+    in
+    let filters =
+      List.flatten [ after_clause; min_ord_clause; max_ord_clause ]
+    in
+    let where =
+      match filters with
+      | [] -> ""
+      | l -> " where " ^ String.concat " and " l
     in
     let limit =
       match max_count with
@@ -159,13 +196,34 @@ struct
       | l ->
           let k1, k2, _, _ = BatList.last l in
           Some (page,
-                Get_page (fun () -> get_page ~after:(k1, k2) ?max_count ()))
+                Get_page (fun () ->
+                  get_page
+                    ~after:(k1, k2)
+                    ?max_count
+                    ?min_ord
+                    ?xmin_ord
+                    ?max_ord
+                    ?xmax_ord
+                    ())
+               )
     )
 
-  let to_stream ?(page_size = 1000) () =
+  let to_stream
+      ?(page_size = 1000)
+      ?min_ord
+      ?xmin_ord
+      ?max_ord
+      ?xmax_ord
+      () =
     let q = Queue.create () in
     let get_next_page = ref (
-      fun () -> get_page ~max_count:page_size ()
+      fun () ->
+        get_page
+          ~max_count:page_size
+          ?min_ord
+          ?xmin_ord
+          ?max_ord
+          ?xmax_ord ()
     ) in
     let rec get_next_item () =
       if Queue.is_empty q then
@@ -185,12 +243,37 @@ struct
     in
     Lwt_stream.from get_next_item
 
-  let iter ?page_size ?(max_threads = 1) f =
-    let stream = to_stream ?page_size () in
+  let iter
+      ?page_size
+      ?min_ord
+      ?xmin_ord
+      ?max_ord
+      ?xmax_ord
+      ?(max_threads = 1) f =
+    let stream =
+      to_stream
+        ?page_size
+        ?min_ord
+        ?xmin_ord
+        ?max_ord
+        ?xmax_ord
+        () in
     Util_lwt.iter_stream max_threads stream f
 
-  let to_list ?page_size () =
-    Lwt_stream.to_list (to_stream ?page_size ())
+  let to_list
+      ?page_size
+      ?min_ord
+      ?xmin_ord
+      ?max_ord
+      ?xmax_ord () =
+    Lwt_stream.to_list (to_stream
+                          ?page_size
+                          ?min_ord
+                          ?xmin_ord
+                          ?max_ord
+                          ?xmax_ord
+                          ()
+                       )
 
   let get_list
       k1_name k1_to_esc
@@ -352,8 +435,12 @@ let test () =
     module Key1 = Int_key
     module Key2 = Int_key
     module Value = Int_key
-    module Ord = Util_time
-    let create_ord k1 k2 v = Util_time.now ()
+    module Ord = struct
+      type t = float
+      let to_float x = x
+      let of_float x = x
+    end
+    let create_ord k1 k2 v = float k2
   end
   in
   let module Testset = Make (Param) in
@@ -381,6 +468,16 @@ let test () =
 
     Testset.count1 1 >>= fun n ->
     assert (n = List.length l1);
+
+    Testset.to_list ~page_size:2 () >>= fun l ->
+    assert (List.length l = 4);
+
+    Testset.to_list ~min_ord:11. ~xmax_ord:13. () >>= fun l ->
+    Printf.printf "length: %i\n%!" (List.length l);
+    assert (List.map (fun (_, k2, _, _) -> k2) l = [11; 12]);
+
+    Testset.to_list ~xmin_ord:11. ~max_ord:13. () >>= fun l ->
+    assert (List.map (fun (_, k2, _, _) -> k2) l = [12; 13]);
 
     return true
   )
