@@ -263,7 +263,7 @@ struct
       | Some n -> invalid_arg (sprintf "get_page ~max_count:%d" n)
     in
     let st =
-      sprintf "select k1, k2, v, ord from %s%s order by k1, k2 asc%s;"
+      sprintf "select k1, k2, v, ord from %s%s order by k2 asc%s;"
         esc_tblname
         where
         limit
