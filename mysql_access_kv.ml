@@ -396,7 +396,7 @@ let test () =
   in
   let module Testkv = Make (Param) in
   let open Lwt in
-  Lwt_main.run (
+  Util_lwt_main.run (
     Testkv.create_table () >>= fun () ->
     Random.self_init ();
     let k = Random.int 1_000_000 in

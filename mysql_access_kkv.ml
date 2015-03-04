@@ -652,7 +652,7 @@ let test_kkv_basic_operations () =
   in
   let module Testkkv = Make (Param) in
   let open Lwt in
-  Lwt_main.run (
+  Util_lwt_main.run (
     Testkkv.create_table () >>= fun () ->
     Random.self_init ();
     let k1 = Random.int 1_000_000 in
@@ -715,7 +715,7 @@ let test_kkv_paging () =
   in
   let module Tbl = Make (Param) in
   let open Lwt in
-  Lwt_main.run (
+  Util_lwt_main.run (
     Tbl.create_table () >>= fun () ->
     let data = [
       0, 1, 1.;

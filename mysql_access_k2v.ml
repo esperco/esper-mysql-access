@@ -445,7 +445,7 @@ let test () =
   in
   let module Testset = Make (Param) in
   let open Lwt in
-  Lwt_main.run (
+  Util_lwt_main.run (
     Testset.create_table () >>= fun () ->
     let k1 = 1 in
     let l1 = [

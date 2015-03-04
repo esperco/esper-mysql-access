@@ -126,7 +126,7 @@ let mysql_exec statement handler =
   )
 
 let test () =
-  Lwt_main.run (
+  Util_lwt_main.run (
     mysql_exec "create database if not exists mytest;" ignore >>= fun () ->
     return true
   )
