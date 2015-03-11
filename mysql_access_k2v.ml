@@ -473,7 +473,6 @@ let test () =
     assert (List.length l = 4);
 
     Testset.to_list ~min_ord:11. ~xmax_ord:13. () >>= fun l ->
-    Printf.printf "length: %i\n%!" (List.length l);
     assert (List.map (fun (_, k2, _, _) -> k2) l = [11; 12]);
 
     Testset.to_list ~xmin_ord:11. ~max_ord:13. () >>= fun l ->
