@@ -88,8 +88,10 @@ let call user_f =
     let worker_env = getenv () in
     user_f worker_env
   in
-  Cloudwatch.time "mysql.any.latency" (fun () ->
-    Lwt_preemptive.detach f ()
+  Perf.time "mysql" (fun () ->
+    Cloudwatch.time "mysql.any.latency" (fun () ->
+      Lwt_preemptive.detach f ()
+    )
   )
 
 (*****)
