@@ -41,13 +41,44 @@ sig
   val get_full : key -> (value * ord) option Lwt.t
     (* Same as [get] but returns the 'ord' field as well. *)
 
-  val get_page :
-    ?direction: Mysql_types.direction ->
+  val to_stream :
+    ?page_size: int ->
     ?min_ord: ord ->
+    ?xmin_ord: ord ->
     ?max_ord: ord ->
-    ?max_count: int ->
+    ?xmax_ord: ord ->
+    unit -> (key * value * ord) Lwt_stream.t
+    (* get all entries in the table, page by page.
+       page_size is the number of items to fetch in one mysql query
+       (default: 1000)
+    *)
+
+  val to_list :
+    ?page_size: int ->
+    ?min_ord: ord ->
+    ?xmin_ord: ord ->
+    ?max_ord: ord ->
+    ?xmax_ord: ord ->
     unit -> (key * value * ord) list Lwt.t
-    (* Select entries based on the 'ord' column *)
+    (* get all entries in the table as a list.
+       Not recommended on large tables.
+    *)
+
+  val iter :
+    ?page_size: int ->
+    ?min_ord: ord ->
+    ?xmin_ord: ord ->
+    ?max_ord: ord ->
+    ?xmax_ord: ord ->
+    ?max_threads: int ->
+    ((key * value * ord) -> unit Lwt.t) ->
+    unit Lwt.t
+    (* iterate over all entries in the table sequentially.
+       page_size is the number of items to fetch in one mysql query
+       (default: 1000).
+       max_threads is the maximum number of items to process in parallel
+       (default: 1, i.e. sequential processing is the default).
+    *)
 
   val put : key -> value -> unit Lwt.t
     (* Set the value associated with the key, overwriting the
@@ -182,66 +213,152 @@ struct
       | None -> key_not_found key
       | Some x -> return x
 
-  let get_page
-      ?(direction = `Asc)
-      ?min_ord
-      ?max_ord
-      ?max_count
-      () =
+  type page = (key * value * ord) list
 
-    let mini =
-      match min_ord with
-      | None -> None
-      | Some x -> Some (sprintf "ord>=%s" (esc_ord x))
+  (* This type definition is purely so that we don't have to
+     use the -rectypes compiler option. *)
+  type get_page = Get_page of (unit -> (page * get_page) option Lwt.t)
+
+  let rec get_page
+      ?after
+      ?max_count
+      ?min_ord
+      ?xmin_ord
+      ?max_ord
+      ?xmax_ord (): (page * get_page) option Lwt.t =
+    let after_clause =
+      match after with
+      | None -> []
+      | Some k -> [ sprintf "k > '%s'" (esc_key k) ]
     in
-    let maxi =
-      match max_ord with
-      | None -> None
-      | Some x -> Some (sprintf "ord<=%s" (esc_ord x))
+    let min_ord_clause =
+      match min_ord, xmin_ord with
+      | None, None -> []
+      | Some ord, None -> [ sprintf "ord >= %s" (esc_ord ord) ]
+      | _, Some ord -> [ sprintf "ord > %s" (esc_ord ord) ]
     in
-    let order =
-      match direction with
-      | `Asc -> " order by ord asc"
-      | `Desc -> " order by ord desc"
+    let max_ord_clause =
+      match max_ord, xmax_ord with
+      | None, None -> []
+      | Some ord, None -> [ sprintf "ord <= %s" (esc_ord ord) ]
+      | _, Some ord -> [ sprintf "ord < %s" (esc_ord ord) ]
+    in
+    let filters =
+      List.flatten [ after_clause; min_ord_clause; max_ord_clause ]
+    in
+    let where =
+      match filters with
+      | [] -> ""
+      | l -> " where " ^ String.concat " and " l
     in
     let limit =
       match max_count with
       | None -> ""
-      | Some x -> sprintf " limit %d" x
-    in
-    let where =
-      let l = BatList.filter_map (fun o -> o) [mini; maxi] in
-      match l with
-      | [] -> ""
-      | l -> " where " ^ String.concat " and " l
+      | Some n when n > 0 -> sprintf " limit %d" n
+      | Some n -> invalid_arg (sprintf "get_page ~max_count:%d" n)
     in
     let st =
-      sprintf "select k, v, ord from %s%s%s%s;"
+      sprintf "select k, v, ord from %s%s order by k asc%s;"
         esc_tblname
         where
-        order
         limit
     in
     Mysql_lwt.mysql_exec st (fun x ->
       let res, _affected = Mysql_lwt.unwrap_result x in
       let rows = Mysql_util.fetch_all res in
-      BatList.filter_map (function
-        | [| Some k; Some v; Some ord |] ->
-            (try Some (Param.Key.of_string k,
-                       Param.Value.of_string v,
-                       ord_of_string ord)
-             with e ->
-                 let msg = Log.string_of_exn e in
-                 Log.logf `Error "Malformed row data in table %s: \
-                              k=%s v=%s ord=%s exception: %s"
-                   tblname
-                   k v ord
-                   msg;
-                 None
-            )
-        |  _ -> failwith ("Broken result returned on: " ^ st)
+      let page =
+        BatList.map (function
+          | [| Some k; Some v; Some ord |] ->
+              (Param.Key.of_string k,
+               Param.Value.of_string v,
+               ord_of_string ord)
+          |  _ -> failwith ("Broken result returned on: " ^ st)
         ) rows
+      in
+      match page with
+      | [] -> None
+      | l ->
+          let k, _, _ = BatList.last l in
+          Some (page,
+                Get_page (fun () ->
+                  get_page
+                    ~after:k
+                    ?max_count
+                    ?min_ord
+                    ?xmin_ord
+                    ?max_ord
+                    ?xmax_ord
+                    ())
+               )
     )
+
+  let to_stream
+      ?(page_size = 1000)
+      ?min_ord
+      ?xmin_ord
+      ?max_ord
+      ?xmax_ord
+      () =
+    let q = Queue.create () in
+    let get_next_page = ref (
+      fun () ->
+        get_page
+          ~max_count:page_size
+          ?min_ord
+          ?xmin_ord
+          ?max_ord
+          ?xmax_ord ()
+    ) in
+    let rec get_next_item () =
+      if Queue.is_empty q then
+        (* refill queue *)
+        !get_next_page () >>= function
+        | None ->
+            get_next_page := (fun () -> assert false);
+            return None
+        | Some (page, Get_page get_next) ->
+            assert (page <> []);
+            List.iter (fun x -> Queue.add x q) page;
+            get_next_page := get_next;
+            (* retry read from queue *)
+            get_next_item ()
+      else
+        return (Some (Queue.take q))
+    in
+    Lwt_stream.from get_next_item
+
+  let iter
+      ?page_size
+      ?min_ord
+      ?xmin_ord
+      ?max_ord
+      ?xmax_ord
+      ?(max_threads = 1) f =
+    let stream =
+      to_stream
+        ?page_size
+        ?min_ord
+        ?xmin_ord
+        ?max_ord
+        ?xmax_ord
+        ()
+    in
+    Util_lwt.iter_stream max_threads stream f
+
+  let to_list
+      ?page_size
+      ?min_ord
+      ?xmin_ord
+      ?max_ord
+      ?xmax_ord () =
+    Lwt_stream.to_list (to_stream
+                          ?page_size
+                          ?min_ord
+                          ?xmin_ord
+                          ?max_ord
+                          ?xmax_ord
+                          ()
+                       )
 
   let mget keys =
     match keys with
@@ -416,6 +533,62 @@ let test () =
     return true
   )
 
+let test_kv_paging () =
+  let module Param = struct
+    let tblname = "testkv_paging"
+    module Key = struct
+      type t = int
+      let to_string = string_of_int
+      let of_string = int_of_string
+    end
+    module Value = struct
+      type t = float
+      let to_string x = Printf.sprintf "%.17g" x
+      let of_string s = float_of_string s
+    end
+    module Ord = struct
+      type t = float
+      let to_float x = x
+      let of_float x = x
+    end
+    let create_ord k v = v
+    let update_ord = None
+  end
+  in
+  let module Tbl = Make (Param) in
+  let open Lwt in
+  Util_lwt_main.run (
+    Tbl.create_table () >>= fun () ->
+    let data = [
+      1, 1.;
+      2, 1.;
+      3, 20.;
+      4, 1.;
+      5, 1.;
+      6, 1.;
+    ] in
+    let sorted_keys = List.map (fun (k, v) -> k) data in
+    Lwt_list.iter_s (fun (k, v) ->
+      Tbl.put k v
+    ) data >>= fun () ->
+
+    Tbl.to_list ~page_size:3 () >>= fun l ->
+    let extracted_keys = List.map (fun (k, v, ord) -> k) l in
+    assert (extracted_keys = sorted_keys);
+
+    Tbl.to_list ~min_ord:1. ~xmin_ord:1. () >>= fun l ->
+    assert (List.length l = 1);
+
+    Tbl.to_list ~xmin_ord:1. ~max_ord:20. () >>= fun l ->
+    assert (List.length l = 1);
+
+    Tbl.to_list ~xmin_ord:1. ~xmax_ord:20. () >>= fun l ->
+    assert (List.length l = 0);
+
+    return true
+  )
+
 let tests = [
   "basic key-value operations", test;
+  "kv paging", test_kv_paging;
 ]
