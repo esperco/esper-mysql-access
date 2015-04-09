@@ -103,6 +103,24 @@ sig
     (* Same as get1; returns the keys to next page ('start_ord', 'xstart_key2')
        for convenience *)
 
+  val to_stream1 :
+    ?page_size: int ->
+    ?ord_direction: Mysql_types.direction ->
+    ?key2_direction: Mysql_types.direction ->
+    ?start_ord: ord ->
+    ?xend_ord: ord ->
+    ?max_count: int ->
+    key1 -> (key2 * value * ord) Lwt_stream.t
+
+  val iter1 :
+    ?page_size: int ->
+    ?ord_direction: Mysql_types.direction ->
+    ?key2_direction: Mysql_types.direction ->
+    ?start_ord: ord ->
+    ?xend_ord: ord ->
+    ?max_count: int ->
+    key1 -> ((key2 * value * ord) -> unit Lwt.t) -> unit Lwt.t
+
   val get2 : key2 -> (key1 * value * ord) option Lwt.t
     (* Get the value associated with the key if it exists. *)
 
@@ -483,6 +501,55 @@ struct
           | Some (k2, v, ord) -> Some (ord, k2)
     in
     return (l, next)
+
+  let to_stream1
+      ?(page_size = 1000)
+      ?ord_direction
+      ?key2_direction
+      ?start_ord
+      ?xend_ord
+      ?max_count
+      k1 =
+
+    let rec get_page xstart_key2 () =
+      get1_page
+        ?ord_direction
+        ?key2_direction
+        ?start_ord
+        ?xstart_key2
+        ?xend_ord
+        ~max_count:page_size
+        k1
+      >>= fun (page, next) ->
+      match next with
+      | None ->
+          assert (page = []);
+          return None
+      | Some (last_ord, last_k2) ->
+          return (Some (page, `Get_page (get_page (Some last_k2))))
+    in
+   Mysql_util.stream_from_pages (get_page None)
+
+  let iter1
+    ?page_size
+    ?ord_direction
+    ?key2_direction
+    ?start_ord
+    ?xend_ord
+    ?max_count
+    key1 f =
+
+    let strm =
+      to_stream1
+        ?page_size
+        ?ord_direction
+        ?key2_direction
+        ?start_ord
+        ?xend_ord
+        ?max_count
+        key1
+    in
+    Lwt_stream.iter_s f strm
 
   let mget2 keys =
     match keys with
