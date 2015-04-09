@@ -30,6 +30,8 @@ let reorder key_sequence values get_key =
   Array.fast_sort cmp a;
   Array.to_list (Array.map snd a)
 
+  (* This type definition is purely so that we don't have to
+     use the -rectypes compiler option. *)
 type 'a get_page = [
   | `Get_page of (unit -> ('a list * 'a get_page) option Lwt.t )
 ]

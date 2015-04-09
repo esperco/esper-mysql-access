@@ -236,19 +236,13 @@ struct
     | `Asc -> ">"
     | `Desc -> "<"
 
-  type page = (key1 * key2 * value * ord) list
-
-  (* This type definition is purely so that we don't have to
-     use the -rectypes compiler option. *)
-  type get_page = Get_page of (unit -> (page * get_page) option Lwt.t)
-
   let rec get_page
       ?after
       ?max_count
       ?min_ord
       ?xmin_ord
       ?max_ord
-      ?xmax_ord (): (page * get_page) option Lwt.t =
+      ?xmax_ord (): ('a list * 'a Mysql_util.get_page) option Lwt.t =
     let after_clause =
       match after with
       | None -> []
@@ -302,7 +296,7 @@ struct
       | l ->
           let k1, k2, _, _ = BatList.last l in
           Some (page,
-                Get_page (fun () ->
+                `Get_page (fun () ->
                   get_page
                     ~after:k2
                     ?max_count
@@ -321,33 +315,16 @@ struct
       ?max_ord
       ?xmax_ord
       () =
-    let q = Queue.create () in
-    let get_next_page = ref (
-      fun () ->
-        get_page
-          ~max_count:page_size
-          ?min_ord
-          ?xmin_ord
-          ?max_ord
-          ?xmax_ord ()
-    ) in
-    let rec get_next_item () =
-      if Queue.is_empty q then
-        (* refill queue *)
-        !get_next_page () >>= function
-        | None ->
-            get_next_page := (fun () -> assert false);
-            return None
-        | Some (page, Get_page get_next) ->
-            assert (page <> []);
-            List.iter (fun x -> Queue.add x q) page;
-            get_next_page := get_next;
-            (* retry read from queue *)
-            get_next_item ()
-      else
-        return (Some (Queue.take q))
+    let get_first_page () =
+      get_page
+        ~max_count:page_size
+        ?min_ord
+        ?xmin_ord
+        ?max_ord
+        ?xmax_ord
+        ()
     in
-    Lwt_stream.from get_next_item
+    Mysql_util.stream_from_pages get_first_page
 
   let iter
       ?page_size
