@@ -491,7 +491,7 @@ struct
       ?max_count
       k1 =
 
-    let rec get_page xstart_key2 () =
+    let rec get_page start_ord xstart_key2 () =
       get1_page
         ?ord_direction
         ?key2_direction
@@ -506,11 +506,11 @@ struct
         | None ->
             None
         | Some (last_ord, last_k2) ->
-            Some (`Get_page (get_page (Some last_k2)))
+            Some (`Get_page (get_page (Some last_ord) (Some last_k2)))
       in
       return (page, next)
     in
-    Mysql_util.stream_from_pages (get_page None)
+    Mysql_util.stream_from_pages (get_page None None)
 
   let iter1
     ?page_size
@@ -854,6 +854,20 @@ let test_kkv_paging () =
 
     Tbl.to_list ~xmin_ord:1. ~xmax_ord:20. () >>= fun l ->
     assert (List.length l = 0);
+
+    let stream =
+      Tbl.to_stream1 1
+        ~page_size:2 ~max_count:3 ~ord_direction:`Desc
+    in
+    Lwt_stream.to_list stream >>= fun l ->
+    (match l with
+     | [ 3, _, 20.;
+         2, _, 1.;
+         4, _, 1.;
+         5, _, 1.;
+       ] -> ()
+     | _ -> assert false
+    );
 
     return true
   )
