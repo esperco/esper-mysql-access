@@ -119,6 +119,7 @@ sig
     ?start_ord: ord ->
     ?xend_ord: ord ->
     ?max_count: int ->
+    ?max_threads: int ->
     key1 -> ((key2 * value * ord) -> unit Lwt.t) -> unit Lwt.t
 
   val get2 : key2 -> (key1 * value * ord) option Lwt.t
@@ -514,9 +515,10 @@ struct
     ?start_ord
     ?xend_ord
     ?max_count
+    ?(max_threads = 1)
     key1 f =
 
-    let strm =
+    let stream =
       to_stream1
         ?page_size
         ?ord_direction
@@ -526,7 +528,7 @@ struct
         ?max_count
         key1
     in
-    Lwt_stream.iter_s f strm
+    Util_lwt.iter_stream max_threads stream f
 
   let mget2 keys =
     match keys with
