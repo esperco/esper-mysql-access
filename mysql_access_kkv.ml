@@ -243,7 +243,7 @@ struct
       ?min_ord
       ?xmin_ord
       ?max_ord
-      ?xmax_ord (): ('a list * 'a Mysql_util.get_page) option Lwt.t =
+      ?xmax_ord (): ('a list * 'a Mysql_util.get_page option) Lwt.t =
     let after_clause =
       match after with
       | None -> []
@@ -292,21 +292,23 @@ struct
           |  _ -> failwith ("Broken result returned on: " ^ st)
         ) rows
       in
-      match page with
-      | [] -> None
-      | l ->
-          let k1, k2, _, _ = BatList.last l in
-          Some (page,
-                `Get_page (fun () ->
-                  get_page
-                    ~after:k2
-                    ?max_count
-                    ?min_ord
-                    ?xmin_ord
-                    ?max_ord
-                    ?xmax_ord
-                    ())
-               )
+      let next =
+        match page with
+        | [] -> None
+        | l ->
+            let k1, k2, _, _ = BatList.last l in
+            Some (`Get_page (fun () ->
+              get_page
+                ~after:k2
+                ?max_count
+                ?min_ord
+                ?xmin_ord
+                ?max_ord
+                ?xmax_ord
+                ())
+            )
+      in
+      page, next
     )
 
   let to_stream
@@ -498,15 +500,17 @@ struct
         ?xend_ord
         ~max_count:page_size
         k1
-      >>= fun (page, next) ->
-      match next with
-      | None ->
-          assert (page = []);
-          return None
-      | Some (last_ord, last_k2) ->
-          return (Some (page, `Get_page (get_page (Some last_k2))))
+      >>= fun (page, last) ->
+      let next =
+        match last with
+        | None ->
+            None
+        | Some (last_ord, last_k2) ->
+            Some (`Get_page (get_page (Some last_k2)))
+      in
+      return (page, next)
     in
-   Mysql_util.stream_from_pages (get_page None)
+    Mysql_util.stream_from_pages (get_page None)
 
   let iter1
     ?page_size

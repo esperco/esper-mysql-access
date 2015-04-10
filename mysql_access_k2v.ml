@@ -133,7 +133,7 @@ struct
       ?min_ord
       ?xmin_ord
       ?max_ord
-      ?xmax_ord (): ('a list * 'a Mysql_util.get_page) option Lwt.t =
+      ?xmax_ord (): ('a list * 'a Mysql_util.get_page option) Lwt.t =
     let after_clause =
       match after with
       | None -> []
@@ -185,21 +185,23 @@ struct
           |  _ -> failwith ("Broken result returned on: " ^ st)
         ) rows
       in
-      match page with
-      | [] -> None
-      | l ->
+      let next =
+        match page with
+        | [] -> None
+        | l ->
           let k1, k2, _, _ = BatList.last l in
-          Some (page,
-                `Get_page (fun () ->
-                  get_page
-                    ~after:(k1, k2)
-                    ?max_count
-                    ?min_ord
-                    ?xmin_ord
-                    ?max_ord
-                    ?xmax_ord
-                    ())
-               )
+          Some (`Get_page (fun () ->
+            get_page
+              ~after:(k1, k2)
+              ?max_count
+              ?min_ord
+              ?xmin_ord
+              ?max_ord
+              ?xmax_ord
+              ())
+          )
+      in
+      page, next
     )
 
   let to_stream

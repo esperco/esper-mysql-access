@@ -33,33 +33,28 @@ let reorder key_sequence values get_key =
   (* This type definition is purely so that we don't have to
      use the -rectypes compiler option. *)
 type 'a get_page = [
-  | `Get_page of (unit -> ('a list * 'a get_page) option Lwt.t )
+  | `Get_page of (unit -> ('a list * 'a get_page option) Lwt.t)
 ]
 
-let stream_from_pages
-    ?(end_on_empty_page = false)
-    get_first_page: 'a Lwt_stream.t =
-    let q = Queue.create () in
-    let get_next_page = ref get_first_page in
-    let rec get_next_item () =
-      if Queue.is_empty q then
-        (* refill queue *)
-        !get_next_page () >>= function
-        | None ->
-            get_next_page := (fun () -> assert false);
-            return None
-        | Some ([], _) when end_on_empty_page ->
-            get_next_page := (fun () -> assert false);
-            return None
-        | Some (page, `Get_page get_next) ->
-            List.iter (fun x -> Queue.add x q) page;
-            get_next_page := get_next;
-            (* retry read from queue *)
-            get_next_item ()
-      else
-        return (Some (Queue.take q))
-    in
-    Lwt_stream.from get_next_item
+let stream_from_pages get_first_page: 'a Lwt_stream.t =
+  let q = Queue.create () in
+  let get_next_page = ref (Some (`Get_page get_first_page)) in
+  let rec get_next_item () =
+    if Queue.is_empty q then
+      (* refill queue *)
+      match !get_next_page with
+      | None ->
+          return None
+      | Some (`Get_page f) ->
+          f () >>= fun (page, opt_get_page) ->
+          get_next_page := opt_get_page;
+          List.iter (fun x -> Queue.add x q) page;
+          (* retry read from queue *)
+          get_next_item ()
+    else
+      return (Some (Queue.take q))
+  in
+  Lwt_stream.from get_next_item
 
 let test_reorder () =
   let keys = [ "once"; "upon"; "a"; "time"; "once" ] in
@@ -81,14 +76,14 @@ let test_reorder () =
 
 let test_stream () =
   let rec get_page last =
-    let x1 = last + 1 in
-    let x2 = x1 + 1 in
-    if x2 <= 4 then
+    if last >= 4 then
+      return ([], None)
+    else
+      let x1 = last + 1 in
+      let x2 = x1 + 1 in
       let page = [ x1; x2 ] in
       let get_page () = get_page x2 in
-      return (Some (page, `Get_page get_page))
-    else
-      return None
+      return (page, Some (`Get_page get_page))
   in
   let stream = stream_from_pages (fun () -> get_page 0) in
   let result = Lwt_main.run (Lwt_stream.to_list stream) in
