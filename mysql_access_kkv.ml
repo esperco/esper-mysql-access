@@ -125,6 +125,9 @@ sig
   val get2 : key2 -> (key1 * value * ord) option Lwt.t
     (* Get the value associated with the key if it exists. *)
 
+  val exists2 : key2 -> bool Lwt.t
+    (* Whether such entry exists *)
+
   val put : key1 -> key2 -> value -> unit Lwt.t
     (* Set the container key and the value associated with the key key2,
        replacing the existing row if any. *)
@@ -454,6 +457,11 @@ struct
         | Some _ -> failwith ("Broken result returned on: " ^ st)
       )
     )
+
+  let exists2 k2 =
+    get2 k2 >>= function
+    | None -> return false
+    | Some _ -> return true
 
   let get1_page
       ?ord_direction
