@@ -94,6 +94,28 @@ sig
     (* Count number of entries under key1.
        Also restricted to ord if it is specified. *)
 
+  val delete1 : key1 -> unit Lwt.t
+    (* Set a write lock on the table/key1 pair
+       and delete the matching entries. *)
+
+  val delete2 : key2 -> unit Lwt.t
+    (* Set a write lock on the table/key2 pair and delete the entry
+       if it exists. *)
+
+  val lock1 : key1 -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+  val lock2 : key2 -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+    (* Set a write lock on the table/key pair while the user-given
+       function is running. [update] and [update_exn] are usually more useful.
+    *)
+
+  val unprotected_delete1 : key1 -> unit Lwt.t
+    (* Remove the given entries if it exists regardless of the presence
+       of a lock. *)
+
+  val unprotected_delete2 : key2 -> unit Lwt.t
+    (* Remove the given entry if it exists regardless of the presence
+       of a lock. *)
+
   (**/**)
   (* testing only; not the authoritative copy for this schema *)
   val create_table : unit -> unit Lwt.t
@@ -376,6 +398,48 @@ struct
     Mysql_lwt.mysql_exec st (fun x ->
       let _res = Mysql_lwt.unwrap_result x in
       ()
+    )
+
+  let unprotected_delete1 key1 =
+    let st =
+      sprintf "delete from %s where k1='%s';"
+        esc_tblname (esc_key1 key1)
+    in
+    Mysql_lwt.mysql_exec st (fun x ->
+      let _res = Mysql_lwt.unwrap_result x in
+      ()
+    )
+
+  let unprotected_delete2 key2 =
+    let st =
+      sprintf "delete from %s where k2='%s';"
+        esc_tblname (esc_key2 key2)
+    in
+    Mysql_lwt.mysql_exec st (fun x ->
+      let _res = Mysql_lwt.unwrap_result x in
+      ()
+    )
+
+  let mutex_name1 k =
+    tblname ^ "::" ^ (Param.Key1.to_string k)
+
+  let mutex_name2 k =
+    tblname ^ ":" ^ (Param.Key2.to_string k)
+
+  let lock1 k f =
+    Redis_mutex.with_mutex (mutex_name1 k) f
+
+  let lock2 k f =
+    Redis_mutex.with_mutex (mutex_name2 k) f
+
+  let delete1 k =
+    lock1 k (fun () ->
+      unprotected_delete1 k
+    )
+
+  let delete2 k =
+    lock2 k (fun () ->
+      unprotected_delete2 k
     )
 
   (* NOT the authoritative copy of the schema. Do not use in production. *)
