@@ -105,7 +105,7 @@ sig
   val lock1 : key1 -> (unit -> 'a Lwt.t) -> 'a Lwt.t
   val lock2 : key2 -> (unit -> 'a Lwt.t) -> 'a Lwt.t
     (* Set a write lock on the table/key pair while the user-given
-       function is running. [update] and [update_exn] are usually more useful.
+       function is running.
     *)
 
   val unprotected_delete1 : key1 -> unit Lwt.t
@@ -520,6 +520,13 @@ let test () =
 
     Testset.to_list ~xmin_ord:11. ~max_ord:13. () >>= fun l ->
     assert (List.map (fun (_, k2, _, _) -> k2) l = [12; 13]);
+
+    Testset.unprotected_delete2 13 >>= fun () ->
+    Testset.get2 13 >>= fun l ->
+    assert (l = []);
+    Testset.unprotected_delete1 k1 >>= fun () ->
+    Testset.get1 k1 >>= fun l ->
+    assert (l = []);
 
     return true
   )
