@@ -521,12 +521,12 @@ let test () =
     Testset.to_list ~xmin_ord:11. ~max_ord:13. () >>= fun l ->
     assert (List.map (fun (_, k2, _, _) -> k2) l = [12; 13]);
 
+    Testset.get2 13 >>= fun l -> assert (l <> []);
     Testset.unprotected_delete2 13 >>= fun () ->
-    Testset.get2 13 >>= fun l ->
-    assert (l = []);
+    Testset.get2 13 >>= fun l -> assert (l = []);
+    Testset.get1 k1 >>= fun l -> assert (l <> []);
     Testset.unprotected_delete1 k1 >>= fun () ->
-    Testset.get1 k1 >>= fun l ->
-    assert (l = []);
+    Testset.get1 k1 >>= fun l -> assert (l = []);
 
     return true
   )
