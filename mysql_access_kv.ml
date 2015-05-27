@@ -41,6 +41,11 @@ sig
   val get_full : key -> (value * ord) option Lwt.t
     (* Same as [get] but returns the 'ord' field as well. *)
 
+  val count : unit -> int Lwt.t
+    (* Count the number of rows in the table using mysql count()
+       TODO: add range filter on ord
+    *)
+
   val to_stream :
     ?page_size: int ->
     ?min_ord: ord ->
@@ -212,6 +217,17 @@ struct
     get key >>= function
       | None -> key_not_found key
       | Some x -> return x
+
+  let count () =
+    let st =
+      sprintf "select count(*) from %s;"
+        esc_tblname
+    in
+    Mysql_lwt.mysql_exec st (fun x ->
+      match Mysql.fetch (fst (Mysql_lwt.unwrap_result x)) with
+      | Some [| Some n |] -> int_of_string n
+      | _ -> failwith ("Broken result returned on: " ^ st)
+    )
 
   let rec get_page
       ?after

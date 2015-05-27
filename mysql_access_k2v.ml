@@ -356,7 +356,7 @@ struct
       | Some x -> " and ord=" ^ esc_ord x
       | None   -> "" in
     let st =
-      sprintf "select count(*) from %s where k1='%s'%s"
+      sprintf "select count(*) from %s where k1='%s'%s;"
         esc_tblname (esc_key1 k1) cond_ord
     in
     Mysql_lwt.mysql_exec st (fun x ->
