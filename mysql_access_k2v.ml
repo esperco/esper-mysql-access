@@ -15,6 +15,7 @@ sig
   module Value : Mysql_types.Serializable
   module Ord : Mysql_types.Numeric
   val create_ord : Key1.t -> Key2.t -> Value.t -> Ord.t
+  val update_ord : (Key1.t -> Key2.t -> Value.t -> Ord.t -> Ord.t) option
 end
 
 module type K2V =
@@ -27,11 +28,33 @@ sig
 
   (* Operations on a single element *)
 
-  val get : key1 -> key2 -> (value * ord) option Lwt.t
+  val get : key1 -> key2 -> value option Lwt.t
+  val get_full : key1 -> key2 -> (value * ord) option Lwt.t
   val exists : key1 -> key2 -> bool Lwt.t
   val put : key1 -> key2 -> value -> unit Lwt.t
+
+  (* FIXME get rid of this and use update instead *)
   val put_if_new : key1 -> key2 -> value -> bool Lwt.t
+
+  val unprotected_put : key1 -> key2 -> value -> ord -> unit Lwt.t
+  val unprotected_put_if_new : key1 -> key2 -> value -> ord -> bool Lwt.t
   val delete : key1 -> key2 -> unit Lwt.t
+
+  val update :
+    key1 -> key2 ->
+    (value option -> (value option * 'a) Lwt.t) ->
+    'a Lwt.t
+    (* Set a write lock on the table/key1 pair and on the table/key2 pair,
+       read the value and write the new value
+       upon termination of the user-given function.
+       If the returned value is [None] the original value is preserved.
+    *)
+
+  val update_full :
+    key1 -> key2 ->
+    ((value * ord) option -> (value option * 'a) Lwt.t) ->
+    'a Lwt.t
+    (* Same as [update] but [ord] is also passed to the callback function *)
 
   (* Operations on multiple elements *)
 
@@ -138,6 +161,13 @@ struct
   type value = Param.Value.t
   type ord = Param.Ord.t
   let tblname = Param.tblname
+
+  let create_ord = Param.create_ord
+
+  let update_ord =
+    match Param.update_ord with
+      None -> (fun k1 k2 v ord -> ord)
+    | Some f -> f
 
   let esc_tblname = Mysql.escape tblname
   let esc_key1 key = Mysql.escape (Param.Key1.to_string key)
@@ -333,7 +363,7 @@ struct
       "k1" Param.Key1.of_string
       ?direction ?min_ord ?max_ord ?max_count k2
 
-  let get k1 k2 =
+  let get_full k1 k2 =
     let st =
       sprintf "select v, ord from %s where k1='%s' and k2='%s';"
         esc_tblname (esc_key1 k1) (esc_key2 k2)
@@ -347,6 +377,11 @@ struct
         | None -> None
         |  _ -> failwith ("Broken result returned on: " ^ st)
     )
+
+  let get k1 k2 =
+    get_full k1 k2 >>= function
+    | None -> return None
+    | Some (v, ord) -> return (Some v)
 
   let count1
       ?ord
@@ -366,12 +401,11 @@ struct
     )
 
   let exists k1 k2 =
-    get k1 k2 >>= function
+    get_full k1 k2 >>= function
       | None -> return false
       | Some _ -> return true
 
-  let put' verb k1 k2 v =
-    let ord = Param.create_ord k1 k2 v in
+  let unprotected_put' verb k1 k2 v ord =
     let st =
       sprintf "\
 %s into %s (k1, k2, v, ord) values ('%s', '%s', '%s', %s);
@@ -383,11 +417,11 @@ struct
       affected
     )
 
-  let put k1 k2 v =
-    put' "replace" k1 k2 v >>= fun (_affected:int64) -> return ()
+  let unprotected_put k1 k2 v =
+    unprotected_put' "replace" k1 k2 v >>= fun (_affected:int64) -> return ()
 
-  let put_if_new k1 k2 v =
-    put' "insert ignore" k1 k2 v >>= fun affected ->
+  let unprotected_put_if_new k1 k2 v =
+    unprotected_put' "insert ignore" k1 k2 v >>= fun affected ->
     return (affected > 0L)
 
   let delete k1 k2 =
@@ -431,6 +465,31 @@ struct
 
   let lock2 k f =
     Redis_mutex.with_mutex (mutex_name2 k) f
+
+  let update_full k1 k2 f =
+    lock1 k1 (fun () ->
+      lock2 k2 (fun () ->
+        get_full k1 k2 >>= fun opt_v_ord ->
+        f opt_v_ord >>= fun (opt_v', result) ->
+        (match opt_v' with
+         | None -> return ()
+         | Some v' ->
+             let ord' =
+               match opt_v_ord with
+               | None -> create_ord k1 k2 v'
+               | Some (_, ord) -> update_ord k1 k2 v' ord
+             in
+             unprotected_put k1 k2 v' ord'
+        ) >>= fun () ->
+        return result
+      )
+    )
+
+  let update k1 k2 f =
+    update_full k1 k2 (function
+      | None -> f None
+      | Some (v, ord) -> f (Some v)
+    )
 
   let delete1 k =
     lock1 k (fun () ->
