@@ -404,7 +404,7 @@ struct
   let unprotected_put k1 k2 v ord =
     let st =
       sprintf "\
-insert into %s (k1, k2, v, ord) values ('%s', '%s', '%s', %s);
+replace into %s (k1, k2, v, ord) values ('%s', '%s', '%s', %s);
 "
         esc_tblname (esc_key1 k1) (esc_key2 k2) (esc_value v) (esc_ord ord)
     in
@@ -581,6 +581,27 @@ let test () =
     Testset.get1 k1 >>= fun l -> assert (l <> []);
     Testset.unprotected_delete1 k1 >>= fun () ->
     Testset.get1 k1 >>= fun l -> assert (l = []);
+
+    let upd_k1 = 15 and upd_k2 = 25 in
+    Testset.update upd_k1 upd_k2 (function
+      | None -> return (None, ())
+      | Some _ -> assert false
+    ) >>= fun () ->
+
+    Testset.update upd_k1 upd_k2 (function
+      | None -> return (Some 0, ())
+      | Some _ -> assert false
+    ) >>= fun () ->
+
+    Testset.update upd_k1 upd_k2 (function
+      | Some 0 -> return (Some 1, ())
+      | _ -> assert false
+    ) >>= fun () ->
+
+    (Testset.get upd_k1 upd_k2 >>= function
+     | Some 1 -> return ()
+     | _ -> assert false
+    ) >>= fun () ->
 
     return true
   )
