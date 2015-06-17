@@ -33,11 +33,7 @@ sig
   val exists : key1 -> key2 -> bool Lwt.t
   val put : key1 -> key2 -> value -> unit Lwt.t
 
-  (* FIXME get rid of this and use update instead *)
-  val put_if_new : key1 -> key2 -> value -> bool Lwt.t
-
   val unprotected_put : key1 -> key2 -> value -> ord -> unit Lwt.t
-  val unprotected_put_if_new : key1 -> key2 -> value -> ord -> bool Lwt.t
   val delete : key1 -> key2 -> unit Lwt.t
 
   val update :
@@ -405,24 +401,17 @@ struct
       | None -> return false
       | Some _ -> return true
 
-  let unprotected_put' verb k1 k2 v ord =
+  let unprotected_put k1 k2 v ord =
     let st =
       sprintf "\
-%s into %s (k1, k2, v, ord) values ('%s', '%s', '%s', %s);
+insert into %s (k1, k2, v, ord) values ('%s', '%s', '%s', %s);
 "
-        verb esc_tblname (esc_key1 k1) (esc_key2 k2) (esc_value v) (esc_ord ord)
+        esc_tblname (esc_key1 k1) (esc_key2 k2) (esc_value v) (esc_ord ord)
     in
     Mysql_lwt.mysql_exec st (fun x ->
-      let _res, affected = Mysql_lwt.unwrap_result x in
-      affected
+      let _res = Mysql_lwt.unwrap_result x in
+      ()
     )
-
-  let unprotected_put k1 k2 v =
-    unprotected_put' "replace" k1 k2 v >>= fun (_affected:int64) -> return ()
-
-  let unprotected_put_if_new k1 k2 v =
-    unprotected_put' "insert ignore" k1 k2 v >>= fun affected ->
-    return (affected > 0L)
 
   let delete k1 k2 =
     let st =
@@ -491,6 +480,11 @@ struct
       | Some (v, ord) -> f (Some v)
     )
 
+  let put k1 k2 v =
+    update k1 k2 (fun _old ->
+      return (Some v, ())
+    )
+
   let delete1 k =
     lock1 k (fun () ->
       unprotected_delete1 k
@@ -543,6 +537,7 @@ let test () =
       let of_float x = x
     end
     let create_ord k1 k2 v = float k2
+    let update_ord = None
   end
   in
   let module Testset = Make (Param) in
