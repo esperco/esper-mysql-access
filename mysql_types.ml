@@ -39,4 +39,5 @@ end
 
 module K2V = struct
   let created k1 k2 v = Util_time.now ()
+  let last_modified = Some (fun k1 k2 v ord -> Util_time.now ())
 end
