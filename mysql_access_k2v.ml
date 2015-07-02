@@ -15,6 +15,7 @@ sig
   module Value : Mysql_types.Serializable
   module Ord : Mysql_types.Numeric
   val create_ord : Key1.t -> Key2.t -> Value.t -> Ord.t
+  val update_ord : (Key1.t -> Key2.t -> Value.t -> Ord.t -> Ord.t) option
 end
 
 module type K2V =
@@ -27,11 +28,30 @@ sig
 
   (* Operations on a single element *)
 
-  val get : key1 -> key2 -> (value * ord) option Lwt.t
-  val exists : key1 -> key2 -> bool Lwt.t
+  val get : ?value:value -> key1 -> key2 -> value option Lwt.t
+  val get_full : ?value:value -> key1 -> key2 -> (value * ord) option Lwt.t
+
+  val exists : ?value:value -> key1 -> key2 -> bool Lwt.t
   val put : key1 -> key2 -> value -> unit Lwt.t
-  val put_if_new : key1 -> key2 -> value -> bool Lwt.t
+
+  val unprotected_put : key1 -> key2 -> value -> ord -> unit Lwt.t
   val delete : key1 -> key2 -> unit Lwt.t
+
+  val update :
+    key1 -> key2 ->
+    (value option -> (value option * 'a) Lwt.t) ->
+    'a Lwt.t
+    (* Set a write lock on the table/key1 pair and on the table/key2 pair,
+       read the value and write the new value
+       upon termination of the user-given function.
+       If the returned value is [None] the original value is preserved.
+    *)
+
+  val update_full :
+    key1 -> key2 ->
+    ((value * ord) option -> (value option * 'a) Lwt.t) ->
+    'a Lwt.t
+    (* Same as [update] but [ord] is also passed to the callback function *)
 
   (* Operations on multiple elements *)
 
@@ -79,6 +99,7 @@ sig
     ?min_ord: ord ->
     ?max_ord: ord ->
     ?max_count: int ->
+    ?value: value ->
     key1 -> (key2 * value * ord) list Lwt.t
     (* return all elements having key1, sorted by 'ord' *)
 
@@ -87,10 +108,11 @@ sig
     ?min_ord: ord ->
     ?max_ord: ord ->
     ?max_count: int ->
+    ?value: value ->
     key2 -> (key1 * value * ord) list Lwt.t
     (* return all elements having key2, sorted by 'ord' *)
 
-  val count1 : ?ord: ord -> key1 -> int Lwt.t
+  val count1 : ?ord: ord -> ?value: value -> key1 -> int Lwt.t
     (* Count number of entries under key1.
        Also restricted to ord if it is specified. *)
 
@@ -138,6 +160,13 @@ struct
   type value = Param.Value.t
   type ord = Param.Ord.t
   let tblname = Param.tblname
+
+  let create_ord = Param.create_ord
+
+  let update_ord =
+    match Param.update_ord with
+      None -> (fun k1 k2 v ord -> ord)
+    | Some f -> f
 
   let esc_tblname = Mysql.escape tblname
   let esc_key1 key = Mysql.escape (Param.Key1.to_string key)
@@ -276,10 +305,15 @@ struct
                           ()
                        )
 
+  let filter_v opt_v =
+    match opt_v with
+    | None -> ""
+    | Some v -> sprintf " and v='%s'" (esc_value v)
+
   let get_list
       k1_name k1_to_esc
       k2_name k2_of_string
-      ?(direction = `Asc) ?min_ord ?max_ord ?max_count k1 =
+      ?(direction = `Asc) ?min_ord ?max_ord ?max_count ?value k1 =
     let mini =
       match min_ord with
       | None -> ""
@@ -301,13 +335,14 @@ struct
       | Some x -> sprintf " limit %d" x
     in
     let st =
-      sprintf "select %s, v, ord from %s where %s='%s'%s%s%s%s;"
+      sprintf "select %s, v, ord from %s where %s='%s'%s%s%s%s%s;"
         k2_name
         esc_tblname
         k1_name
         (k1_to_esc k1)
         mini
         maxi
+        (filter_v value)
         order
         limit
     in
@@ -321,22 +356,22 @@ struct
       ) rows
     )
 
-  let get1 ?direction ?min_ord ?max_ord ?max_count k1 =
+  let get1 ?direction ?min_ord ?max_ord ?max_count ?value k1 =
     get_list
       "k1" esc_key1
       "k2" Param.Key2.of_string
-      ?direction ?min_ord ?max_ord ?max_count k1
+      ?direction ?min_ord ?max_ord ?max_count ?value k1
 
-  let get2 ?direction ?min_ord ?max_ord ?max_count k2 =
+  let get2 ?direction ?min_ord ?max_ord ?max_count ?value k2 =
     get_list
       "k2" esc_key2
       "k1" Param.Key1.of_string
-      ?direction ?min_ord ?max_ord ?max_count k2
+      ?direction ?min_ord ?max_ord ?max_count ?value k2
 
-  let get k1 k2 =
+  let get_full ?value k1 k2 =
     let st =
-      sprintf "select v, ord from %s where k1='%s' and k2='%s';"
-        esc_tblname (esc_key1 k1) (esc_key2 k2)
+      sprintf "select v, ord from %s where k1='%s' and k2='%s'%s;"
+        esc_tblname (esc_key1 k1) (esc_key2 k2) (filter_v value)
     in
     Mysql_lwt.mysql_exec st (fun x ->
       let res, _affected = Mysql_lwt.unwrap_result x in
@@ -348,16 +383,22 @@ struct
         |  _ -> failwith ("Broken result returned on: " ^ st)
     )
 
+  let get ?value k1 k2 =
+    get_full ?value k1 k2 >>= function
+    | None -> return None
+    | Some (v, ord) -> return (Some v)
+
   let count1
       ?ord
+      ?value
       k1 =
     let cond_ord =
       match ord with
       | Some x -> " and ord=" ^ esc_ord x
       | None   -> "" in
     let st =
-      sprintf "select count(*) from %s where k1='%s'%s;"
-        esc_tblname (esc_key1 k1) cond_ord
+      sprintf "select count(*) from %s where k1='%s'%s%s;"
+        esc_tblname (esc_key1 k1) cond_ord (filter_v value)
     in
     Mysql_lwt.mysql_exec st (fun x ->
       match Mysql.fetch (fst (Mysql_lwt.unwrap_result x)) with
@@ -365,30 +406,22 @@ struct
       | _ -> failwith ("Broken result returned on: " ^ st)
     )
 
-  let exists k1 k2 =
-    get k1 k2 >>= function
+  let exists ?value k1 k2 =
+    get_full ?value k1 k2 >>= function
       | None -> return false
       | Some _ -> return true
 
-  let put' verb k1 k2 v =
-    let ord = Param.create_ord k1 k2 v in
+  let unprotected_put k1 k2 v ord =
     let st =
       sprintf "\
-%s into %s (k1, k2, v, ord) values ('%s', '%s', '%s', %s);
+replace into %s (k1, k2, v, ord) values ('%s', '%s', '%s', %s);
 "
-        verb esc_tblname (esc_key1 k1) (esc_key2 k2) (esc_value v) (esc_ord ord)
+        esc_tblname (esc_key1 k1) (esc_key2 k2) (esc_value v) (esc_ord ord)
     in
     Mysql_lwt.mysql_exec st (fun x ->
-      let _res, affected = Mysql_lwt.unwrap_result x in
-      affected
+      let _res = Mysql_lwt.unwrap_result x in
+      ()
     )
-
-  let put k1 k2 v =
-    put' "replace" k1 k2 v >>= fun (_affected:int64) -> return ()
-
-  let put_if_new k1 k2 v =
-    put' "insert ignore" k1 k2 v >>= fun affected ->
-    return (affected > 0L)
 
   let delete k1 k2 =
     let st =
@@ -431,6 +464,36 @@ struct
 
   let lock2 k f =
     Redis_mutex.with_mutex (mutex_name2 k) f
+
+  let update_full k1 k2 f =
+    lock1 k1 (fun () ->
+      lock2 k2 (fun () ->
+        get_full k1 k2 >>= fun opt_v_ord ->
+        f opt_v_ord >>= fun (opt_v', result) ->
+        (match opt_v' with
+         | None -> return ()
+         | Some v' ->
+             let ord' =
+               match opt_v_ord with
+               | None -> create_ord k1 k2 v'
+               | Some (_, ord) -> update_ord k1 k2 v' ord
+             in
+             unprotected_put k1 k2 v' ord'
+        ) >>= fun () ->
+        return result
+      )
+    )
+
+  let update k1 k2 f =
+    update_full k1 k2 (function
+      | None -> f None
+      | Some (v, ord) -> f (Some v)
+    )
+
+  let put k1 k2 v =
+    update k1 k2 (fun _old ->
+      return (Some v, ())
+    )
 
   let delete1 k =
     lock1 k (fun () ->
@@ -484,6 +547,7 @@ let test () =
       let of_float x = x
     end
     let create_ord k1 k2 v = float k2
+    let update_ord = None
   end
   in
   let module Testset = Make (Param) in
@@ -512,6 +576,9 @@ let test () =
     Testset.count1 1 >>= fun n ->
     assert (n = List.length l1);
 
+    Testset.count1 ~value:22 1 >>= fun n ->
+    assert (n = 1);
+
     Testset.to_list ~page_size:2 () >>= fun l ->
     assert (List.length l = 4);
 
@@ -527,6 +594,27 @@ let test () =
     Testset.get1 k1 >>= fun l -> assert (l <> []);
     Testset.unprotected_delete1 k1 >>= fun () ->
     Testset.get1 k1 >>= fun l -> assert (l = []);
+
+    let upd_k1 = 15 and upd_k2 = 25 in
+    Testset.update upd_k1 upd_k2 (function
+      | None -> return (None, ())
+      | Some _ -> assert false
+    ) >>= fun () ->
+
+    Testset.update upd_k1 upd_k2 (function
+      | None -> return (Some 0, ())
+      | Some _ -> assert false
+    ) >>= fun () ->
+
+    Testset.update upd_k1 upd_k2 (function
+      | Some 0 -> return (Some 1, ())
+      | _ -> assert false
+    ) >>= fun () ->
+
+    (Testset.get upd_k1 upd_k2 >>= function
+     | Some 1 -> return ()
+     | _ -> assert false
+    ) >>= fun () ->
 
     return true
   )
