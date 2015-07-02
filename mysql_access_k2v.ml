@@ -564,14 +564,25 @@ let test () =
     Lwt_list.iter_s (fun (k2, v) ->
       Testset.put k1 k2 v
     ) l1 >>= fun () ->
-    Testset.get1 k1 >>= fun l1' ->
+
     let normalize l =
       List.sort compare (List.map (fun (k, v, _) -> (k, v)) l)
     in
+
+    Testset.get1 k1 >>= fun l1' ->
     assert (normalize l1' = l1);
+
+    Testset.get1 ~value:24 k1 >>= fun l ->
+    assert (normalize l = [14, 24]);
 
     Testset.get2 12 >>= fun l2 ->
     assert (normalize l2 = [k1, 22]);
+
+    Testset.get2 ~value:22 12 >>= fun l2 ->
+    assert (normalize l2 = [k1, 22]);
+
+    Testset.get2 ~value:23 12 >>= fun l2 ->
+    assert (l2 = []);
 
     Testset.count1 1 >>= fun n ->
     assert (n = List.length l1);
