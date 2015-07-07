@@ -41,6 +41,8 @@ sig
   val get_full : key -> (value * ord) option Lwt.t
     (* Same as [get] but returns the 'ord' field as well. *)
 
+  val exists: key -> bool Lwt.t
+
   val count : unit -> int Lwt.t
     (* Count the number of rows in the table using mysql count()
        TODO: add range filter on ord
@@ -217,6 +219,11 @@ struct
     get key >>= function
       | None -> key_not_found key
       | Some x -> return x
+
+  let exists key =
+    get key >>= function
+    | None   -> return false
+    | Some _ -> return true
 
   let count () =
     let st =
