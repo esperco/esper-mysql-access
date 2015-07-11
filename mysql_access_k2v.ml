@@ -35,7 +35,7 @@ sig
   val put : key1 -> key2 -> value -> unit Lwt.t
 
   val unprotected_put : key1 -> key2 -> value -> ord -> unit Lwt.t
-  val delete : key1 -> key2 -> unit Lwt.t
+  val delete : ?value:value -> key1 -> key2 -> unit Lwt.t
 
   val update :
     key1 -> key2 ->
@@ -116,11 +116,11 @@ sig
     (* Count number of entries under key1.
        Also restricted to ord if it is specified. *)
 
-  val delete1 : key1 -> unit Lwt.t
+  val delete1 : ?value: value -> key1 -> unit Lwt.t
     (* Set a write lock on the table/key1 pair
        and delete the matching entries. *)
 
-  val delete2 : key2 -> unit Lwt.t
+  val delete2 : ?value: value -> key2 -> unit Lwt.t
     (* Set a write lock on the table/key2 pair and delete the entry
        if it exists. *)
 
@@ -130,11 +130,11 @@ sig
        function is running.
     *)
 
-  val unprotected_delete1 : key1 -> unit Lwt.t
+  val unprotected_delete1 : ?value: value -> key1 -> unit Lwt.t
     (* Remove the given entries if it exists regardless of the presence
        of a lock. *)
 
-  val unprotected_delete2 : key2 -> unit Lwt.t
+  val unprotected_delete2 : ?value: value -> key2 -> unit Lwt.t
     (* Remove the given entry if it exists regardless of the presence
        of a lock. *)
 
@@ -423,30 +423,30 @@ replace into %s (k1, k2, v, ord) values ('%s', '%s', '%s', %s);
       ()
     )
 
-  let delete k1 k2 =
+  let delete ?value k1 k2 =
     let st =
-      sprintf "delete from %s where k1='%s' and k2='%s';"
-        esc_tblname (esc_key1 k1) (esc_key2 k2)
+      sprintf "delete from %s where k1='%s' and k2='%s'%s;"
+        esc_tblname (esc_key1 k1) (esc_key2 k2) (filter_v value)
     in
     Mysql_lwt.mysql_exec st (fun x ->
       let _res = Mysql_lwt.unwrap_result x in
       ()
     )
 
-  let unprotected_delete1 key1 =
+  let unprotected_delete1 ?value key1 =
     let st =
-      sprintf "delete from %s where k1='%s';"
-        esc_tblname (esc_key1 key1)
+      sprintf "delete from %s where k1='%s'%s;"
+        esc_tblname (esc_key1 key1) (filter_v value)
     in
     Mysql_lwt.mysql_exec st (fun x ->
       let _res = Mysql_lwt.unwrap_result x in
       ()
     )
 
-  let unprotected_delete2 key2 =
+  let unprotected_delete2 ?value key2 =
     let st =
-      sprintf "delete from %s where k2='%s';"
-        esc_tblname (esc_key2 key2)
+      sprintf "delete from %s where k2='%s'%s;"
+        esc_tblname (esc_key2 key2) (filter_v value)
     in
     Mysql_lwt.mysql_exec st (fun x ->
       let _res = Mysql_lwt.unwrap_result x in
@@ -495,14 +495,14 @@ replace into %s (k1, k2, v, ord) values ('%s', '%s', '%s', %s);
       return (Some v, ())
     )
 
-  let delete1 k =
+  let delete1 ?value k =
     lock1 k (fun () ->
-      unprotected_delete1 k
+      unprotected_delete1 ?value k
     )
 
-  let delete2 k =
+  let delete2 ?value k =
     lock2 k (fun () ->
-      unprotected_delete2 k
+      unprotected_delete2 ?value k
     )
 
   (* NOT the authoritative copy of the schema. Do not use in production. *)
@@ -530,81 +530,95 @@ create table if not exists %s (
 end
 
 
-let test () =
-  let module Param = struct
-    let tblname = "testset"
-    module Int_key = struct
-      type t = int
-      let to_string = string_of_int
-      let of_string = int_of_string
-    end
-    module Key1 = Int_key
-    module Key2 = Int_key
-    module Value = Int_key
-    module Ord = struct
-      type t = float
-      let to_float x = x
-      let of_float x = x
-    end
-    let create_ord k1 k2 v = float k2
-    let update_ord = None
+module Test_param = struct
+  let tblname = "testset"
+  module Int_key = struct
+    type t = int
+    let to_string = string_of_int
+    let of_string = int_of_string
   end
-  in
-  let module Testset = Make (Param) in
+  module Key1 = Int_key
+  module Key2 = Int_key
+  module Value = Int_key
+  module Ord = struct
+    type t = float
+    let to_float x = x
+    let of_float x = x
+  end
+  let create_ord k1 k2 v = float k2
+  let update_ord = None
+end
+
+module Testset = Make (Test_param)
+
+let test () =
   let open Lwt in
   Util_lwt_main.run (
     Testset.create_table () >>= fun () ->
-    let k1 = 1 in
     let l1 = [
-      11, 21;
-      12, 22;
-      13, 23;
-      14, 24;
+      1, 10, 200;
+      1, 11, 21;
+      1, 12, 22;
+      1, 13, 23;
+      1, 14, 24;
+      2, 13, 230;
     ] in
-    Lwt_list.iter_s (fun (k2, v) ->
+    Lwt_list.iter_s (fun (k1, k2, v) ->
       Testset.put k1 k2 v
     ) l1 >>= fun () ->
 
-    let normalize l =
-      List.sort compare (List.map (fun (k, v, _) -> (k, v)) l)
+    let normalize_abc_ab l =
+      List.sort compare (List.map (fun (a, b, c) -> (a, b)) l)
     in
 
-    Testset.get1 k1 >>= fun l1' ->
-    assert (normalize l1' = l1);
+    let normalize_abc_bc l =
+      List.sort compare (List.map (fun (a, b, c) -> (b, c)) l)
+    in
 
-    Testset.get1 ~value:24 k1 >>= fun l ->
-    assert (normalize l = [14, 24]);
+    Testset.get1 1 >>= fun l1' ->
+    let filtered = List.filter (fun (k1, k2, v) -> k1 = 1) l1 in
+    assert (normalize_abc_ab l1' = normalize_abc_bc filtered);
+
+    Testset.get1 ~value:24 1 >>= fun l ->
+    assert (normalize_abc_ab l = [14, 24]);
 
     Testset.get2 12 >>= fun l2 ->
-    assert (normalize l2 = [k1, 22]);
+    assert (normalize_abc_ab l2 = [1, 22]);
 
     Testset.get2 ~value:22 12 >>= fun l2 ->
-    assert (normalize l2 = [k1, 22]);
+    assert (normalize_abc_ab l2 = [1, 22]);
 
     Testset.get2 ~value:23 12 >>= fun l2 ->
     assert (l2 = []);
 
     Testset.count1 1 >>= fun n ->
-    assert (n = List.length l1);
+    assert (n = List.length l1 - 1);
 
     Testset.count1 ~value:22 1 >>= fun n ->
     assert (n = 1);
 
     Testset.to_list ~page_size:2 () >>= fun l ->
-    assert (List.length l = 4);
+    assert (List.length l = 6);
 
     Testset.to_list ~min_ord:11. ~xmax_ord:13. () >>= fun l ->
     assert (List.map (fun (_, k2, _, _) -> k2) l = [11; 12]);
 
     Testset.to_list ~xmin_ord:11. ~max_ord:13. () >>= fun l ->
-    assert (List.map (fun (_, k2, _, _) -> k2) l = [12; 13]);
+    assert (List.map (fun (_, k2, _, _) -> k2) l = [12; 13; 13]);
 
     Testset.get2 13 >>= fun l -> assert (l <> []);
+    Testset.unprotected_delete2 13 ~value:230 >>= fun () ->
+    Testset.get2 13 >>= fun l -> assert (normalize_abc_ab l = [1, 23]);
+
     Testset.unprotected_delete2 13 >>= fun () ->
     Testset.get2 13 >>= fun l -> assert (l = []);
-    Testset.get1 k1 >>= fun l -> assert (l <> []);
-    Testset.unprotected_delete1 k1 >>= fun () ->
-    Testset.get1 k1 >>= fun l -> assert (l = []);
+
+    Testset.get1 1 >>= fun l -> assert (l <> []);
+    Testset.unprotected_delete1 1 ~value:200 >>= fun () ->
+    Testset.get1 1 >>= fun l -> assert (l <> []);
+
+    Testset.unprotected_delete1 1 >>= fun () ->
+    Testset.get1 1 >>= fun l -> assert (l = []);
 
     let upd_k1 = 15 and upd_k2 = 25 in
     Testset.update upd_k1 upd_k2 (function
