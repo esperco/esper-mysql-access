@@ -57,7 +57,7 @@ let make_protector () =
       result
     with e ->
       Mutex.unlock mutex;
-      raise e
+      Util_exn.reraise e
   in
   protect
 
