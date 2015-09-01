@@ -57,7 +57,7 @@ let make_protector () =
       result
     with e ->
       Mutex.unlock mutex;
-      Util_exn.reraise e
+      Trax.raise __LOC__ e
   in
   protect
 
