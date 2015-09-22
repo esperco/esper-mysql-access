@@ -13,7 +13,7 @@ open Lwt
 let debug_logger = ref ignore
 
 let db_settings () =
-  let conf = Config.get () in
+  let conf = Conf.get () in
   {
     Mysql.dbhost = Some conf.Conf_t.db_host;
     dbname = Some conf.Conf_t.db_name;
