@@ -15,10 +15,10 @@ let debug_logger = ref ignore
 let db_settings () =
   let conf = Config.get () in
   {
-    Mysql.dbhost = Some conf.Config_t.db_host;
-    dbname = Some conf.Config_t.db_name;
+    Mysql.dbhost = Some conf.Conf_t.db_host;
+    dbname = Some conf.Conf_t.db_name;
     dbport = None;
-    dbpwd = conf.Config_t.db_password;
+    dbpwd = conf.Conf_t.db_password;
     dbuser = Some "root";
     dbsocket = None;
   }
