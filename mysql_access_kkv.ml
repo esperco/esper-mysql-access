@@ -127,7 +127,10 @@ sig
     ?max_threads: int ->
     key1 -> ((key2 * value * ord) -> unit Lwt.t) -> unit Lwt.t
 
-  val get2 : key2 -> (key1 * value * ord) option Lwt.t
+  val get2 : key2 -> value option Lwt.t
+    (* Get the value associated with the key if it exists. *)
+
+  val get2_full : key2 -> (key1 * value * ord) option Lwt.t
     (* Get the value associated with the key if it exists. *)
 
   val exists2 : key2 -> bool Lwt.t
@@ -458,7 +461,7 @@ struct
       ) rows
     )
 
-  let get2 key =
+  let get2_full key =
     let st =
       sprintf "select k1, v, ord from %s where k2='%s';"
         esc_tblname (esc_key2 key)
@@ -474,6 +477,11 @@ struct
         | Some _ -> failwith ("Broken result returned on: " ^ st)
       )
     )
+
+  let get2 k2 =
+    get2_full k2 >>= function
+    | None -> return None
+    | Some (k1, v, ord) -> return (Some v)
 
   let exists2 k2 =
     get2 k2 >>= function
@@ -590,7 +598,7 @@ struct
           )
 
   let get2_exn key =
-    get2 key >>= function
+    get2_full key >>= function
       | None -> key2_not_found key
       | Some x -> return x
 
@@ -638,7 +646,7 @@ struct
 
   let update k2 f =
     lock2 k2 (fun () ->
-      get2 k2 >>= fun opt_x ->
+      get2_full k2 >>= fun opt_x ->
       f opt_x >>= fun (opt_v', result) ->
       (match opt_v' with
         | None -> return ()
