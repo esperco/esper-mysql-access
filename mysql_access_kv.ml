@@ -124,6 +124,17 @@ sig
     (* Set a write lock on the table/key pair and delete the entry
        if it exists. *)
 
+  val delete_range :
+    ?key:key ->
+    ?max_count:int ->
+    ?min_ord:ord ->
+    ?xmin_ord:ord ->
+    ?max_ord:ord ->
+    ?xmax_ord:ord ->
+    unit -> int64 Lwt.t
+    (* Delete multiple rows in a single mysql call,
+       return the number of rows deleted. *)
+
   val lock : key -> (unit -> 'a Lwt.t) -> 'a Lwt.t
     (* Set a write lock on the table/key pair while the user-given
        function is running. [update] and [update_exn] are usually more useful.
@@ -236,13 +247,19 @@ struct
       | _ -> failwith ("Broken result returned on: " ^ st)
     )
 
-  let rec get_page
-      ?after
-      ?max_count
-      ?min_ord
-      ?xmin_ord
-      ?max_ord
-      ?xmax_ord (): ('a list * 'a Mysql_util.get_page option) Lwt.t =
+  let make_where_clause
+    ?key
+    ?after
+    ?min_ord
+    ?xmin_ord
+    ?max_ord
+    ?xmax_ord
+    () =
+    let key_clause =
+      match key with
+      | None -> []
+      | Some k -> [ sprintf "k = '%s'" (esc_key k) ]
+    in
     let after_clause =
       match after with
       | None -> []
@@ -261,19 +278,38 @@ struct
       | _, Some ord -> [ sprintf "ord < %s" (esc_ord ord) ]
     in
     let filters =
-      List.flatten [ after_clause; min_ord_clause; max_ord_clause ]
+      List.flatten [ key_clause; after_clause; min_ord_clause; max_ord_clause ]
     in
     let where =
       match filters with
       | [] -> ""
       | l -> " where " ^ String.concat " and " l
     in
-    let limit =
-      match max_count with
-      | None -> ""
-      | Some n when n > 0 -> sprintf " limit %d" n
-      | Some n -> invalid_arg (sprintf "get_page ~max_count:%d" n)
+    where
+
+  let make_limit_clause opt_max_count =
+    match opt_max_count with
+    | None -> ""
+    | Some n when n > 0 -> sprintf " limit %d" n
+    | Some n -> invalid_arg (sprintf "get_page ~max_count:%d" n)
+
+  let rec get_page
+      ?after
+      ?max_count
+      ?min_ord
+      ?xmin_ord
+      ?max_ord
+      ?xmax_ord (): ('a list * 'a Mysql_util.get_page option) Lwt.t =
+    let where =
+      make_where_clause
+        ?after
+        ?min_ord
+        ?xmin_ord
+        ?max_ord
+        ?xmax_ord
+        ()
     in
+    let limit = make_limit_clause max_count in
     let st =
       sprintf "select k, v, ord from %s%s order by k asc%s;"
         esc_tblname
@@ -399,15 +435,35 @@ struct
       ()
     )
 
-  let unprotected_delete key =
+  let delete_range
+    ?key
+    ?max_count
+    ?min_ord
+    ?xmin_ord
+    ?max_ord
+    ?xmax_ord
+    () =
+    let where =
+      make_where_clause
+        ?key
+        ?min_ord
+        ?xmin_ord
+        ?max_ord
+        ?xmax_ord
+        ()
+    in
+    let limit = make_limit_clause max_count in
     let st =
-      sprintf "delete from %s where k='%s';"
-        esc_tblname (esc_key key)
+      sprintf "delete from %s%s%s;" esc_tblname where limit
     in
     Mysql_lwt.mysql_exec st (fun x ->
-      let _res = Mysql_lwt.unwrap_result x in
-      ()
+      let (res, count) = Mysql_lwt.unwrap_result x in
+      count
     )
+
+  let unprotected_delete key =
+    delete_range ~key () >>= fun n ->
+    return ()
 
   let mutex_name k =
     tblname ^ ":" ^ (Param.Key.to_string k)
@@ -585,6 +641,12 @@ let test_kv_paging () =
 
     Tbl.to_list ~xmin_ord:1. ~xmax_ord:20. () >>= fun l ->
     assert (List.length l = 0);
+
+    Tbl.delete_range ~min_ord:0.5 ~xmax_ord:20. () >>= fun n ->
+    assert (n = 5L);
+
+    Tbl.to_list () >>= fun l ->
+    assert (List.length l = 1);
 
     return true
   )
