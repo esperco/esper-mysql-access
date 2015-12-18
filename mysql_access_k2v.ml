@@ -124,6 +124,18 @@ sig
     (* Set a write lock on the table/key2 pair and delete the entry
        if it exists. *)
 
+  val delete_range :
+    ?key1:key1 ->
+    ?key2:key2 ->
+    ?max_count:int ->
+    ?min_ord:ord ->
+    ?xmin_ord:ord ->
+    ?max_ord:ord ->
+    ?xmax_ord:ord ->
+    unit -> int64 Lwt.t
+    (* Delete multiple rows in a single mysql call,
+       return the number of rows deleted. *)
+
   val lock1 : key1 -> (unit -> 'a Lwt.t) -> 'a Lwt.t
   val lock2 : key2 -> (unit -> 'a Lwt.t) -> 'a Lwt.t
     (* Set a write lock on the table/key pair while the user-given
@@ -178,13 +190,25 @@ struct
   let ord_of_string s =
     Param.Ord.of_float (float_of_string s)
 
-  let rec get_page
+  let make_where_clause
+      ?key1
+      ?key2
       ?after
-      ?max_count
       ?min_ord
       ?xmin_ord
       ?max_ord
-      ?xmax_ord (): ('a list * 'a Mysql_util.get_page option) Lwt.t =
+      ?xmax_ord
+      () =
+    let key1_clause =
+      match key1 with
+      | None -> []
+      | Some k1 -> [ sprintf "k1 = '%s'" (esc_key1 k1) ]
+    in
+    let key2_clause =
+      match key2 with
+      | None -> []
+      | Some k2 -> [ sprintf "k2 = '%s'" (esc_key2 k2) ]
+    in
     let after_clause =
       match after with
       | None -> []
@@ -206,19 +230,40 @@ struct
       | _, Some ord -> [ sprintf "ord < %s" (esc_ord ord) ]
     in
     let filters =
-      List.flatten [ after_clause; min_ord_clause; max_ord_clause ]
+      List.flatten
+        [ key1_clause; key2_clause; after_clause;
+          min_ord_clause; max_ord_clause ]
     in
     let where =
       match filters with
       | [] -> ""
       | l -> " where " ^ String.concat " and " l
     in
-    let limit =
-      match max_count with
-      | None -> ""
-      | Some n when n > 0 -> sprintf " limit %d" n
-      | Some n -> invalid_arg (sprintf "get_page ~max_count:%d" n)
+    where
+
+  let make_limit_clause opt_max_count =
+    match opt_max_count with
+    | None -> ""
+    | Some n when n > 0 -> sprintf " limit %d" n
+    | Some n -> invalid_arg (sprintf "max_count:%d" n)
+
+  let rec get_page
+      ?after
+      ?max_count
+      ?min_ord
+      ?xmin_ord
+      ?max_ord
+      ?xmax_ord (): ('a list * 'a Mysql_util.get_page option) Lwt.t =
+    let where =
+      make_where_clause
+        ?after
+        ?min_ord
+        ?xmin_ord
+        ?max_ord
+        ?xmax_ord
+        ()
     in
+    let limit = make_limit_clause max_count in
     let st =
       sprintf "select k1, k2, v, ord from %s%s order by k1, k2 asc%s;"
         esc_tblname
@@ -423,15 +468,37 @@ replace into %s (k1, k2, v, ord) values ('%s', '%s', '%s', %s);
       ()
     )
 
-  let delete ?value k1 k2 =
+  let delete_range
+      ?key1
+      ?key2
+      ?max_count
+      ?min_ord
+      ?xmin_ord
+      ?max_ord
+      ?xmax_ord
+      () =
+    let where =
+      make_where_clause
+        ?key1
+        ?key2
+        ?min_ord
+        ?xmin_ord
+        ?max_ord
+        ?xmax_ord
+        ()
+    in
+    let limit = make_limit_clause max_count in
     let st =
-      sprintf "delete from %s where k1='%s' and k2='%s'%s;"
-        esc_tblname (esc_key1 k1) (esc_key2 k2) (filter_v value)
+      sprintf "delete from %s%s%s;" esc_tblname where limit
     in
     Mysql_lwt.mysql_exec st (fun x ->
-      let _res = Mysql_lwt.unwrap_result x in
-      ()
+      let (res, count) = Mysql_lwt.unwrap_result x in
+      count
     )
+
+  let delete ?value k1 k2 =
+    delete_range ~key1:k1 ~key2:k2 () >>= fun n ->
+    return ()
 
   let unprotected_delete1 ?value key1 =
     let st =
@@ -640,6 +707,16 @@ let test () =
      | Some 1 -> return ()
      | _ -> assert false
     ) >>= fun () ->
+
+    Testset.to_list () >>= fun l ->
+    let len1 = List.length l in
+    Testset.put 1000 2000 3000 >>= fun () ->
+    Testset.to_list () >>= fun l ->
+    assert (List.length l = len1 + 1);
+    Testset.delete_range ~min_ord:2000. ~xmax_ord:2001. () >>= fun n ->
+    assert (n = 1L);
+    Testset.to_list () >>= fun l ->
+    assert (List.length l = len1);
 
     return true
   )

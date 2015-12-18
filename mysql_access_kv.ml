@@ -256,14 +256,12 @@ struct
     ?xmax_ord
     () =
     let key_clause =
-      match key with
-      | None -> []
-      | Some k -> [ sprintf "k = '%s'" (esc_key k) ]
-    in
-    let after_clause =
       match after with
-      | None -> []
       | Some k -> [ sprintf "k > '%s'" (esc_key k) ]
+      | None ->
+          match key with
+          | None -> []
+          | Some k -> [ sprintf "k = '%s'" (esc_key k) ]
     in
     let min_ord_clause =
       match min_ord, xmin_ord with
@@ -278,7 +276,7 @@ struct
       | _, Some ord -> [ sprintf "ord < %s" (esc_ord ord) ]
     in
     let filters =
-      List.flatten [ key_clause; after_clause; min_ord_clause; max_ord_clause ]
+      List.flatten [ key_clause; min_ord_clause; max_ord_clause ]
     in
     let where =
       match filters with
@@ -291,7 +289,7 @@ struct
     match opt_max_count with
     | None -> ""
     | Some n when n > 0 -> sprintf " limit %d" n
-    | Some n -> invalid_arg (sprintf "get_page ~max_count:%d" n)
+    | Some n -> invalid_arg (sprintf "max_count:%d" n)
 
   let rec get_page
       ?after
