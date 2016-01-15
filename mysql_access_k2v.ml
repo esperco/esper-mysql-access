@@ -333,7 +333,7 @@ struct
         ?max_ord
         ?xmax_ord
         () in
-    Util_lwt.iter_stream max_threads stream f
+    Util_lwt_stream.iter_stream max_threads stream f
 
   let to_list
       ?page_size
