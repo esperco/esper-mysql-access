@@ -753,15 +753,15 @@ struct
     let st =
       sprintf "\
 create table if not exists %s (
-       k1 varchar(767) character set ascii not null,
-       k2 varchar(767) character set ascii not null,
+       k1 varchar(255) not null,
+       k2 varchar(255) not null,
        v longblob not null,
        ord double not null,
 
        primary key (k2),
        index (k1),
        index (ord)
-) engine=InnoDB;
+) engine=InnoDB default charset=utf8;
 "
         esc_tblname
     in
