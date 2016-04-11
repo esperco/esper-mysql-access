@@ -147,6 +147,13 @@ sig
     (* Get the value associated with the key, raising an exception
        if no such entry exists in the table. *)
 
+  val update :
+    key2 ->
+    (value -> (value * 'result) Lwt.t) ->
+    'result Lwt.t
+    (* Update a value. For access to key1 and ord, use update_full instead.
+       An exception is raised if the value doesn't already exist. *)
+
   val update_full :
     key2 ->
     ((key1 * value * ord) option -> ((key1 * value) option * 'a) Lwt.t) ->
@@ -159,8 +166,8 @@ sig
 
   val update_exn :
     key2 ->
-    ((key1 * value * ord) -> ((key1 * value) option * 'a) Lwt.t) ->
-    'a Lwt.t
+    ((key1 * value * ord) -> ((key1 * value) option * 'result) Lwt.t) ->
+    'result Lwt.t
     (* Same as [update] but raises an exception if the value does
        not exist initially. *)
 
@@ -717,6 +724,14 @@ struct
             unprotected_put k1' k2 v' ord'
       ) >>= fun () ->
       return result
+    )
+
+  let update k2 f =
+    update_full k2 (function
+      | None -> key2_not_found k2
+      | Some (k1, v, ord) ->
+          f v >>= fun (v, result) ->
+          return (Some (k1, v), result)
     )
 
   let update_exn k2 f =
