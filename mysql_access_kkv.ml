@@ -149,7 +149,7 @@ sig
 
   val update :
     key2 ->
-    (value -> (value * 'result) Lwt.t) ->
+    (value -> (value option * 'result) Lwt.t) ->
     'result Lwt.t
     (* Update a value. For access to key1 and ord, use update_full instead.
        An exception is raised if the value doesn't already exist. *)
@@ -730,8 +730,10 @@ struct
     update_full k2 (function
       | None -> key2_not_found k2
       | Some (k1, v, ord) ->
-          f v >>= fun (v, result) ->
-          return (Some (k1, v), result)
+          f v >>= fun (opt_v, result) ->
+          match opt_v with
+          | None -> return (None, result)
+          | Some v -> return (Some (k1, v), result)
     )
 
   let update_exn k2 f =
