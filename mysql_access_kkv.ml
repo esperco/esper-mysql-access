@@ -147,7 +147,7 @@ sig
     (* Get the value associated with the key, raising an exception
        if no such entry exists in the table. *)
 
-  val update :
+  val update_full :
     key2 ->
     ((key1 * value * ord) option -> ((key1 * value) option * 'a) Lwt.t) ->
     'a Lwt.t
@@ -702,7 +702,7 @@ struct
   let lock2 k f =
     Redis_mutex.with_mutex (mutex_name2 k) f
 
-  let update k2 f =
+  let update_full k2 f =
     lock2 k2 (fun () ->
       get2_full k2 >>= fun opt_x ->
       f opt_x >>= fun (opt_v', result) ->
@@ -734,7 +734,7 @@ struct
     )
 
   let put k1 k2 v =
-    update k2 (fun _old ->
+    update_full k2 (fun _old ->
       return (Some (k1, v), ())
     )
 
