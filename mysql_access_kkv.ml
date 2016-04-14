@@ -417,7 +417,7 @@ struct
         ?xmax_ord
         ()
     in
-    Util_lwt_stream.iter_stream max_threads stream f
+    Util_lwt_stream.iter max_threads stream f
 
   let to_list
       ?page_size
@@ -614,7 +614,7 @@ struct
         ?max_count
         key1
     in
-    Util_lwt_stream.iter_stream max_threads stream f
+    Util_lwt_stream.iter max_threads stream f
 
   let mget2 keys =
     match keys with
