@@ -50,10 +50,12 @@ sig
 
   val to_stream :
     ?page_size: int ->
+    ?ord_direction: [`Asc | `Desc] ->
     ?min_ord: ord ->
     ?xmin_ord: ord ->
     ?max_ord: ord ->
     ?xmax_ord: ord ->
+    ?max_count: int ->
     unit -> (key * value * ord) Lwt_stream.t
     (* get all entries in the table, page by page.
        page_size is the number of items to fetch in one mysql query
@@ -62,10 +64,12 @@ sig
 
   val to_list :
     ?page_size: int ->
+    ?ord_direction: [`Asc | `Desc] ->
     ?min_ord: ord ->
     ?xmin_ord: ord ->
     ?max_ord: ord ->
     ?xmax_ord: ord ->
+    ?max_count: int ->
     unit -> (key * value * ord) list Lwt.t
     (* get all entries in the table as a list.
        Not recommended on large tables.
@@ -73,10 +77,12 @@ sig
 
   val iter :
     ?page_size: int ->
+    ?ord_direction: [`Asc | `Desc] ->
     ?min_ord: ord ->
     ?xmin_ord: ord ->
     ?max_ord: ord ->
     ?xmax_ord: ord ->
+    ?max_count: int ->
     ?max_threads: int ->
     ((key * value * ord) -> unit Lwt.t) ->
     unit Lwt.t
@@ -285,19 +291,31 @@ struct
     in
     where
 
-  let make_limit_clause opt_max_count =
+  let make_limit_clause n =
+    if n < 0 then
+      invalid_arg (sprintf "max_count:%d" n);
+    sprintf " limit %d" n
+
+  let update_max_count opt_max_count l =
     match opt_max_count with
-    | None -> ""
-    | Some n when n > 0 -> sprintf " limit %d" n
-    | Some n -> invalid_arg (sprintf "max_count:%d" n)
+    | None -> None
+    | Some max_count ->
+        Some (max 0 (max_count - List.length l))
+
+  let string_of_dir = function
+    | `Asc -> "asc"
+    | `Desc -> "desc"
 
   let rec get_page
       ?after
-      ?max_count
+      ?(page_size = 1000)
+      ?(ord_direction = `Asc)
       ?min_ord
       ?xmin_ord
       ?max_ord
-      ?xmax_ord (): ('a list * 'a Mysql_util.get_page option) Lwt.t =
+      ?xmax_ord
+      ?max_count
+      (): ('a list * 'a Mysql_util.get_page option) Lwt.t =
     let where =
       make_where_clause
         ?after
@@ -307,11 +325,13 @@ struct
         ?xmax_ord
         ()
     in
-    let limit = make_limit_clause max_count in
+    let direction = string_of_dir ord_direction in
+    let limit = make_limit_clause page_size in
     let st =
-      sprintf "select k, v, ord from %s%s order by k asc%s;"
+      sprintf "select k, v, ord from %s%s order by ord %s%s;"
         esc_tblname
         where
+        direction
         limit
     in
     Mysql_lwt.mysql_exec st (fun x ->
@@ -330,68 +350,89 @@ struct
         match page with
         | [] -> None
         | l ->
-            let k, _, _ = BatList.last l in
-            Some (`Get_page (fun () ->
-              get_page
-                ~after:k
-                ?max_count
-                ?min_ord
-                ?xmin_ord
-                ?max_ord
-                ?xmax_ord
-                ()
-            ))
+            let max_count = update_max_count max_count l in
+            match max_count with
+            | Some 0 ->
+                None
+            | _ ->
+                let k, _, _ = BatList.last l in
+                Some (`Get_page (fun () ->
+                  get_page
+                    ~after:k
+                    ~page_size
+                    ~ord_direction
+                    ?min_ord
+                    ?xmin_ord
+                    ?max_ord
+                    ?xmax_ord
+                    ?max_count
+                    ()
+                ))
       in
       page, next
     )
 
   let to_stream
-      ?(page_size = 1000)
+      ?page_size
+      ?ord_direction
       ?min_ord
       ?xmin_ord
       ?max_ord
       ?xmax_ord
+      ?max_count
       () =
     let get_first_page () =
       get_page
-        ~max_count:page_size
+        ?page_size
+        ?ord_direction
         ?min_ord
         ?xmin_ord
         ?max_ord
-        ?xmax_ord ()
+        ?xmax_ord
+        ?max_count
+        ()
     in
     Mysql_util.stream_from_pages get_first_page
 
   let iter
       ?page_size
+      ?ord_direction
       ?min_ord
       ?xmin_ord
       ?max_ord
       ?xmax_ord
+      ?max_count
       ?(max_threads = 1) f =
     let stream =
       to_stream
         ?page_size
+        ?ord_direction
         ?min_ord
         ?xmin_ord
         ?max_ord
         ?xmax_ord
+        ?max_count
         ()
     in
     Util_lwt_stream.iter max_threads stream f
 
   let to_list
       ?page_size
+      ?ord_direction
       ?min_ord
       ?xmin_ord
       ?max_ord
-      ?xmax_ord () =
+      ?xmax_ord
+      ?max_count
+      () =
     Lwt_stream.to_list (to_stream
                           ?page_size
+                          ?ord_direction
                           ?min_ord
                           ?xmin_ord
                           ?max_ord
                           ?xmax_ord
+                          ?max_count
                           ()
                        )
 
@@ -450,7 +491,11 @@ struct
         ?xmax_ord
         ()
     in
-    let limit = make_limit_clause max_count in
+    let limit =
+      match max_count with
+      | None -> ""
+      | Some n -> make_limit_clause n
+    in
     let st =
       sprintf "delete from %s%s%s;" esc_tblname where limit
     in
