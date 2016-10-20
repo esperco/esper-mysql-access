@@ -150,6 +150,12 @@ sig
     (* Get the value associated with the key, raising an exception
        if no such entry exists in the table. *)
 
+  val get_min_ord : unit -> ord option Lwt.t
+    (* Return the minimum value in the ord column. *)
+
+  val get_max_ord : unit -> ord option Lwt.t
+    (* Return the maximum value in the ord column. *)
+
   val update :
     key2 ->
     (value -> (value option * 'result) Lwt.t) ->
@@ -665,6 +671,23 @@ struct
       | None -> key2_not_found key
       | Some x -> return x
 
+  let get_single_ord function_name =
+    let st =
+      sprintf "select %s(ord) from %s;" function_name esc_tblname
+    in
+    fun () ->
+      Mysql_lwt.mysql_exec st (fun x ->
+        let res, _affected = Mysql_lwt.unwrap_result x in
+        let rows = Mysql_util.fetch_all res in
+        match rows with
+        | [ [| Some ord |] ] -> Some (ord_of_string ord)
+        | [] -> None
+        |  _ -> failwith ("Broken result returned on: " ^ st)
+      )
+
+  let get_min_ord = get_single_ord "min"
+  let get_max_ord = get_single_ord "max"
+
   let unprotected_put k1 k2 value ord =
     let st =
       sprintf "replace into %s(k1, k2, v, ord) values ('%s', '%s', '%s', %s);"
@@ -901,6 +924,12 @@ let test_kkv_paging () =
     Lwt_list.iter_s (fun (k1, k2, v) ->
       Tbl.put k1 k2 v
     ) data >>= fun () ->
+
+    Tbl.get_min_ord () >>= fun m ->
+    assert (m = Some 1.);
+
+    Tbl.get_max_ord () >>= fun m ->
+    assert (m = Some 20.);
 
     (Tbl.get1_page 0 >>= function
     | [ (1, v, ord) ], None ->
