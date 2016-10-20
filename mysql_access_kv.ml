@@ -50,7 +50,7 @@ sig
 
   val to_stream :
     ?page_size: int ->
-    ?ord_direction: [`Asc | `Desc] ->
+    ?k_direction: [`Asc | `Desc] ->
     ?min_ord: ord ->
     ?xmin_ord: ord ->
     ?max_ord: ord ->
@@ -64,7 +64,7 @@ sig
 
   val to_list :
     ?page_size: int ->
-    ?ord_direction: [`Asc | `Desc] ->
+    ?k_direction: [`Asc | `Desc] ->
     ?min_ord: ord ->
     ?xmin_ord: ord ->
     ?max_ord: ord ->
@@ -77,7 +77,7 @@ sig
 
   val iter :
     ?page_size: int ->
-    ?ord_direction: [`Asc | `Desc] ->
+    ?k_direction: [`Asc | `Desc] ->
     ?min_ord: ord ->
     ?xmin_ord: ord ->
     ?max_ord: ord ->
@@ -291,10 +291,18 @@ struct
     in
     where
 
-  let make_limit_clause n =
-    if n < 0 then
-      invalid_arg (sprintf "max_count:%d" n);
-    sprintf " limit %d" n
+  let make_limit_clause page_size opt_max_count =
+    if page_size < 0 then
+      invalid_arg (sprintf "page_size: %d" page_size);
+    let limit =
+      match opt_max_count with
+      | None -> page_size
+      | Some max_count ->
+          if max_count < 0 then
+            invalid_arg (sprintf "max_count: %d" max_count);
+          min max_count page_size
+    in
+    sprintf " limit %d" limit
 
   let update_max_count opt_max_count l =
     match opt_max_count with
@@ -309,7 +317,7 @@ struct
   let rec get_page
       ?after
       ?(page_size = 1000)
-      ?(ord_direction = `Asc)
+      ?(k_direction = `Asc)
       ?min_ord
       ?xmin_ord
       ?max_ord
@@ -325,10 +333,10 @@ struct
         ?xmax_ord
         ()
     in
-    let direction = string_of_dir ord_direction in
-    let limit = make_limit_clause page_size in
+    let direction = string_of_dir k_direction in
+    let limit = make_limit_clause page_size max_count in
     let st =
-      sprintf "select k, v, ord from %s%s order by ord %s%s;"
+      sprintf "select k, v, ord from %s%s order by k %s%s;"
         esc_tblname
         where
         direction
@@ -360,7 +368,7 @@ struct
                   get_page
                     ~after:k
                     ~page_size
-                    ~ord_direction
+                    ~k_direction
                     ?min_ord
                     ?xmin_ord
                     ?max_ord
@@ -374,7 +382,7 @@ struct
 
   let to_stream
       ?page_size
-      ?ord_direction
+      ?k_direction
       ?min_ord
       ?xmin_ord
       ?max_ord
@@ -384,7 +392,7 @@ struct
     let get_first_page () =
       get_page
         ?page_size
-        ?ord_direction
+        ?k_direction
         ?min_ord
         ?xmin_ord
         ?max_ord
@@ -396,7 +404,7 @@ struct
 
   let iter
       ?page_size
-      ?ord_direction
+      ?k_direction
       ?min_ord
       ?xmin_ord
       ?max_ord
@@ -406,7 +414,7 @@ struct
     let stream =
       to_stream
         ?page_size
-        ?ord_direction
+        ?k_direction
         ?min_ord
         ?xmin_ord
         ?max_ord
@@ -418,7 +426,7 @@ struct
 
   let to_list
       ?page_size
-      ?ord_direction
+      ?k_direction
       ?min_ord
       ?xmin_ord
       ?max_ord
@@ -427,7 +435,7 @@ struct
       () =
     Lwt_stream.to_list (to_stream
                           ?page_size
-                          ?ord_direction
+                          ?k_direction
                           ?min_ord
                           ?xmin_ord
                           ?max_ord
@@ -494,7 +502,7 @@ struct
     let limit =
       match max_count with
       | None -> ""
-      | Some n -> make_limit_clause n
+      | Some n -> make_limit_clause n max_count
     in
     let st =
       sprintf "delete from %s%s%s;" esc_tblname where limit
@@ -656,7 +664,13 @@ let test_kv_paging () =
   end
   in
   let module Tbl = Make (Param) in
+  let open Printf in
   let open Lwt in
+  let print_list l =
+    printf "[\n";
+    List.iter (fun (k, v, ord) -> printf "  %i, %g, %g\n" k v ord) l;
+    printf "]\n%!";
+  in
   Util_lwt_main.run (
     Tbl.create_table () >>= fun () ->
     let data = [
@@ -671,6 +685,25 @@ let test_kv_paging () =
     Lwt_list.iter_s (fun (k, v) ->
       Tbl.put k v
     ) data >>= fun () ->
+
+    Tbl.to_list () >>= fun l ->
+    print_list l;
+    assert (List.length l = List.length data);
+
+    Tbl.to_list ~k_direction:`Asc ~max_count:1 () >>= fun l ->
+    print_list l;
+    (match l with
+     | [ 1, 1., _ ] -> ()
+     | _ -> assert false
+    );
+
+    Tbl.to_list ~k_direction:`Desc ~max_count:2 ~page_size:1 () >>= fun l ->
+    print_list l;
+    (match l with
+     | [ 6, 1., _;
+         5, 1., _ ] -> ()
+     | _ -> assert false
+    );
 
     Tbl.to_list ~page_size:3 () >>= fun l ->
     let extracted_keys = List.map (fun (k, v, ord) -> k) l in
