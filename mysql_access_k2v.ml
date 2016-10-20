@@ -112,6 +112,12 @@ sig
     key2 -> (key1 * value * ord) list Lwt.t
     (* return all elements having key2, sorted by 'ord' *)
 
+  val get_min_ord : unit -> ord option Lwt.t
+    (* Return the minimum value in the ord column. *)
+
+  val get_max_ord : unit -> ord option Lwt.t
+    (* Return the maximum value in the ord column. *)
+
   val count1 : ?ord: ord -> ?value: value -> key1 -> int Lwt.t
     (* Count number of entries under key1.
        Also restricted to ord if it is specified. *)
@@ -433,6 +439,23 @@ struct
     | None -> return None
     | Some (v, ord) -> return (Some v)
 
+  let get_single_ord function_name =
+    let st =
+      sprintf "select %s(ord) from %s;" function_name esc_tblname
+    in
+    fun () ->
+      Mysql_lwt.mysql_exec st (fun x ->
+        let res, _affected = Mysql_lwt.unwrap_result x in
+        let rows = Mysql_util.fetch_all res in
+        match rows with
+        | [ [| Some ord |] ] -> Some (ord_of_string ord)
+        | [] -> None
+        |  _ -> failwith ("Broken result returned on: " ^ st)
+      )
+
+  let get_min_ord = get_single_ord "min"
+  let get_max_ord = get_single_ord "max"
+
   let count1
       ?ord
       ?value
@@ -598,7 +621,7 @@ end
 
 
 module Test_param = struct
-  let tblname = "testset"
+  let tblname = "test_k2v"
   module Int_key = struct
     type t = int
     let to_string = string_of_int
@@ -616,12 +639,12 @@ module Test_param = struct
   let update_ord = None
 end
 
-module Testset = Make (Test_param)
+module Test_k2v = Make (Test_param)
 
 let test () =
   let open Lwt in
   Util_lwt_main.run (
-    Testset.create_table () >>= fun () ->
+    Test_k2v.create_table () >>= fun () ->
     let l1 = [
       1, 10, 200;
       1, 11, 21;
@@ -631,7 +654,7 @@ let test () =
       2, 13, 230;
     ] in
     Lwt_list.iter_s (fun (k1, k2, v) ->
-      Testset.put k1 k2 v
+      Test_k2v.put k1 k2 v
     ) l1 >>= fun () ->
 
     let normalize_abc_ab l =
@@ -642,80 +665,86 @@ let test () =
       List.sort compare (List.map (fun (a, b, c) -> (b, c)) l)
     in
 
-    Testset.get1 1 >>= fun l1' ->
+    Test_k2v.get_min_ord () >>= fun m ->
+    assert (m = Some 10.);
+
+    Test_k2v.get_max_ord () >>= fun m ->
+    assert (m = Some 14.);
+
+    Test_k2v.get1 1 >>= fun l1' ->
     let filtered = List.filter (fun (k1, k2, v) -> k1 = 1) l1 in
     assert (normalize_abc_ab l1' = normalize_abc_bc filtered);
 
-    Testset.get1 ~value:24 1 >>= fun l ->
+    Test_k2v.get1 ~value:24 1 >>= fun l ->
     assert (normalize_abc_ab l = [14, 24]);
 
-    Testset.get2 12 >>= fun l2 ->
+    Test_k2v.get2 12 >>= fun l2 ->
     assert (normalize_abc_ab l2 = [1, 22]);
 
-    Testset.get2 ~value:22 12 >>= fun l2 ->
+    Test_k2v.get2 ~value:22 12 >>= fun l2 ->
     assert (normalize_abc_ab l2 = [1, 22]);
 
-    Testset.get2 ~value:23 12 >>= fun l2 ->
+    Test_k2v.get2 ~value:23 12 >>= fun l2 ->
     assert (l2 = []);
 
-    Testset.count1 1 >>= fun n ->
+    Test_k2v.count1 1 >>= fun n ->
     assert (n = List.length l1 - 1);
 
-    Testset.count1 ~value:22 1 >>= fun n ->
+    Test_k2v.count1 ~value:22 1 >>= fun n ->
     assert (n = 1);
 
-    Testset.to_list ~page_size:2 () >>= fun l ->
+    Test_k2v.to_list ~page_size:2 () >>= fun l ->
     assert (List.length l = 6);
 
-    Testset.to_list ~min_ord:11. ~xmax_ord:13. () >>= fun l ->
+    Test_k2v.to_list ~min_ord:11. ~xmax_ord:13. () >>= fun l ->
     assert (List.map (fun (_, k2, _, _) -> k2) l = [11; 12]);
 
-    Testset.to_list ~xmin_ord:11. ~max_ord:13. () >>= fun l ->
+    Test_k2v.to_list ~xmin_ord:11. ~max_ord:13. () >>= fun l ->
     assert (List.map (fun (_, k2, _, _) -> k2) l = [12; 13; 13]);
 
-    Testset.get2 13 >>= fun l -> assert (l <> []);
-    Testset.unprotected_delete2 13 ~value:230 >>= fun () ->
-    Testset.get2 13 >>= fun l -> assert (normalize_abc_ab l = [1, 23]);
+    Test_k2v.get2 13 >>= fun l -> assert (l <> []);
+    Test_k2v.unprotected_delete2 13 ~value:230 >>= fun () ->
+    Test_k2v.get2 13 >>= fun l -> assert (normalize_abc_ab l = [1, 23]);
 
-    Testset.unprotected_delete2 13 >>= fun () ->
-    Testset.get2 13 >>= fun l -> assert (l = []);
+    Test_k2v.unprotected_delete2 13 >>= fun () ->
+    Test_k2v.get2 13 >>= fun l -> assert (l = []);
 
-    Testset.get1 1 >>= fun l -> assert (l <> []);
-    Testset.unprotected_delete1 1 ~value:200 >>= fun () ->
-    Testset.get1 1 >>= fun l -> assert (l <> []);
+    Test_k2v.get1 1 >>= fun l -> assert (l <> []);
+    Test_k2v.unprotected_delete1 1 ~value:200 >>= fun () ->
+    Test_k2v.get1 1 >>= fun l -> assert (l <> []);
 
-    Testset.unprotected_delete1 1 >>= fun () ->
-    Testset.get1 1 >>= fun l -> assert (l = []);
+    Test_k2v.unprotected_delete1 1 >>= fun () ->
+    Test_k2v.get1 1 >>= fun l -> assert (l = []);
 
     let upd_k1 = 15 and upd_k2 = 25 in
-    Testset.update upd_k1 upd_k2 (function
+    Test_k2v.update upd_k1 upd_k2 (function
       | None -> return (None, ())
       | Some _ -> assert false
     ) >>= fun () ->
 
-    Testset.update upd_k1 upd_k2 (function
+    Test_k2v.update upd_k1 upd_k2 (function
       | None -> return (Some 0, ())
       | Some _ -> assert false
     ) >>= fun () ->
 
-    Testset.update upd_k1 upd_k2 (function
+    Test_k2v.update upd_k1 upd_k2 (function
       | Some 0 -> return (Some 1, ())
       | _ -> assert false
     ) >>= fun () ->
 
-    (Testset.get upd_k1 upd_k2 >>= function
+    (Test_k2v.get upd_k1 upd_k2 >>= function
      | Some 1 -> return ()
      | _ -> assert false
     ) >>= fun () ->
 
-    Testset.to_list () >>= fun l ->
+    Test_k2v.to_list () >>= fun l ->
     let len1 = List.length l in
-    Testset.put 1000 2000 3000 >>= fun () ->
-    Testset.to_list () >>= fun l ->
+    Test_k2v.put 1000 2000 3000 >>= fun () ->
+    Test_k2v.to_list () >>= fun l ->
     assert (List.length l = len1 + 1);
-    Testset.delete_range ~min_ord:2000. ~xmax_ord:2001. () >>= fun n ->
+    Test_k2v.delete_range ~min_ord:2000. ~xmax_ord:2001. () >>= fun n ->
     assert (n = 1L);
-    Testset.to_list () >>= fun l ->
+    Test_k2v.to_list () >>= fun l ->
     assert (List.length l = len1);
 
     return true

@@ -827,7 +827,7 @@ end
 
 let test_kkv_basic_operations () =
   let module Param = struct
-    let tblname = "testkkv_basic"
+    let tblname = "test_kkv_basic"
     module Key = struct
       type t = int
       let to_string = string_of_int
@@ -886,7 +886,7 @@ let test_kkv_basic_operations () =
 
 let test_kkv_paging () =
   let module Param = struct
-    let tblname = "testkkv_paging"
+    let tblname = "test_kkv_paging"
     module Key = struct
       type t = int
       let to_string = string_of_int

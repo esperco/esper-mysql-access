@@ -43,6 +43,12 @@ sig
 
   val exists: key -> bool Lwt.t
 
+  val get_min_ord : unit -> ord option Lwt.t
+    (* Return the minimum value in the ord column. *)
+
+  val get_max_ord : unit -> ord option Lwt.t
+    (* Return the maximum value in the ord column. *)
+
   val count : unit -> int Lwt.t
     (* Count the number of rows in the table using mysql count()
        TODO: add range filter on ord
@@ -235,6 +241,23 @@ struct
     get key >>= function
     | None   -> return false
     | Some _ -> return true
+
+  let get_single_ord function_name =
+    let st =
+      sprintf "select %s(ord) from %s;" function_name esc_tblname
+    in
+    fun () ->
+      Mysql_lwt.mysql_exec st (fun x ->
+        let res, _affected = Mysql_lwt.unwrap_result x in
+        let rows = Mysql_util.fetch_all res in
+        match rows with
+        | [ [| Some ord |] ] -> Some (ord_of_string ord)
+        | [] -> None
+        |  _ -> failwith ("Broken result returned on: " ^ st)
+      )
+
+  let get_min_ord = get_single_ord "min"
+  let get_max_ord = get_single_ord "max"
 
   let count () =
     let st =
@@ -626,6 +649,12 @@ let test_kv_paging () =
     Lwt_list.iter_s (fun (k, v) ->
       Tbl.put k v
     ) data >>= fun () ->
+
+    Tbl.get_min_ord () >>= fun m ->
+    assert (m = Some 1.);
+
+    Tbl.get_max_ord () >>= fun m ->
+    assert (m = Some 20.);
 
     Tbl.to_list ~page_size:3 () >>= fun l ->
     let extracted_keys = List.map (fun (k, v, ord) -> k) l in
