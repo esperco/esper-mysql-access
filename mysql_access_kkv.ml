@@ -681,7 +681,7 @@ struct
         let rows = Mysql_util.fetch_all res in
         match rows with
         | [ [| Some ord |] ] -> Some (ord_of_string ord)
-        | [] -> None
+        | [ [| None |] ] -> None
         |  _ -> failwith ("Broken result returned on: " ^ st)
       )
 
@@ -912,6 +912,9 @@ let test_kkv_paging () =
   let open Lwt in
   Util_lwt_main.run (
     Tbl.create_table () >>= fun () ->
+    Tbl.get_min_ord () >>= fun m ->
+    assert (m = None);
+
     let data = [
       0, 1, 1.;
       1, 2, 1.;

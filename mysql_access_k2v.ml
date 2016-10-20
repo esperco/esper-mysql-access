@@ -449,8 +449,8 @@ struct
         let rows = Mysql_util.fetch_all res in
         match rows with
         | [ [| Some ord |] ] -> Some (ord_of_string ord)
-        | [] -> None
-        |  _ -> failwith ("Broken result returned on: " ^ st)
+        | [ [| None |] ] -> None
+        | _ -> failwith ("Broken result returned on: " ^ st)
       )
 
   let get_min_ord = get_single_ord "min"
@@ -645,6 +645,9 @@ let test () =
   let open Lwt in
   Util_lwt_main.run (
     Test_k2v.create_table () >>= fun () ->
+    Test_k2v.get_min_ord () >>= fun m ->
+    assert (m = None);
+
     let l1 = [
       1, 10, 200;
       1, 11, 21;
