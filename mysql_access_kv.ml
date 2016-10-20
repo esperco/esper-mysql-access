@@ -50,12 +50,10 @@ sig
 
   val to_stream :
     ?page_size: int ->
-    ?k_direction: [`Asc | `Desc] ->
     ?min_ord: ord ->
     ?xmin_ord: ord ->
     ?max_ord: ord ->
     ?xmax_ord: ord ->
-    ?max_count: int ->
     unit -> (key * value * ord) Lwt_stream.t
     (* get all entries in the table, page by page.
        page_size is the number of items to fetch in one mysql query
@@ -64,12 +62,10 @@ sig
 
   val to_list :
     ?page_size: int ->
-    ?k_direction: [`Asc | `Desc] ->
     ?min_ord: ord ->
     ?xmin_ord: ord ->
     ?max_ord: ord ->
     ?xmax_ord: ord ->
-    ?max_count: int ->
     unit -> (key * value * ord) list Lwt.t
     (* get all entries in the table as a list.
        Not recommended on large tables.
@@ -77,12 +73,10 @@ sig
 
   val iter :
     ?page_size: int ->
-    ?k_direction: [`Asc | `Desc] ->
     ?min_ord: ord ->
     ?xmin_ord: ord ->
     ?max_ord: ord ->
     ?xmax_ord: ord ->
-    ?max_count: int ->
     ?max_threads: int ->
     ((key * value * ord) -> unit Lwt.t) ->
     unit Lwt.t
@@ -291,39 +285,19 @@ struct
     in
     where
 
-  let make_limit_clause page_size opt_max_count =
-    if page_size < 0 then
-      invalid_arg (sprintf "page_size: %d" page_size);
-    let limit =
-      match opt_max_count with
-      | None -> page_size
-      | Some max_count ->
-          if max_count < 0 then
-            invalid_arg (sprintf "max_count: %d" max_count);
-          min max_count page_size
-    in
-    sprintf " limit %d" limit
-
-  let update_max_count opt_max_count l =
+  let make_limit_clause opt_max_count =
     match opt_max_count with
-    | None -> None
-    | Some max_count ->
-        Some (max 0 (max_count - List.length l))
-
-  let string_of_dir = function
-    | `Asc -> "asc"
-    | `Desc -> "desc"
+    | None -> ""
+    | Some n when n > 0 -> sprintf " limit %d" n
+    | Some n -> invalid_arg (sprintf "max_count:%d" n)
 
   let rec get_page
       ?after
-      ?(page_size = 1000)
-      ?(k_direction = `Asc)
+      ?max_count
       ?min_ord
       ?xmin_ord
       ?max_ord
-      ?xmax_ord
-      ?max_count
-      (): ('a list * 'a Mysql_util.get_page option) Lwt.t =
+      ?xmax_ord (): ('a list * 'a Mysql_util.get_page option) Lwt.t =
     let where =
       make_where_clause
         ?after
@@ -333,13 +307,11 @@ struct
         ?xmax_ord
         ()
     in
-    let direction = string_of_dir k_direction in
-    let limit = make_limit_clause page_size max_count in
+    let limit = make_limit_clause max_count in
     let st =
-      sprintf "select k, v, ord from %s%s order by k %s%s;"
+      sprintf "select k, v, ord from %s%s order by k asc%s;"
         esc_tblname
         where
-        direction
         limit
     in
     Mysql_lwt.mysql_exec st (fun x ->
@@ -358,89 +330,68 @@ struct
         match page with
         | [] -> None
         | l ->
-            let max_count = update_max_count max_count l in
-            match max_count with
-            | Some 0 ->
-                None
-            | _ ->
-                let k, _, _ = BatList.last l in
-                Some (`Get_page (fun () ->
-                  get_page
-                    ~after:k
-                    ~page_size
-                    ~k_direction
-                    ?min_ord
-                    ?xmin_ord
-                    ?max_ord
-                    ?xmax_ord
-                    ?max_count
-                    ()
-                ))
+            let k, _, _ = BatList.last l in
+            Some (`Get_page (fun () ->
+              get_page
+                ~after:k
+                ?max_count
+                ?min_ord
+                ?xmin_ord
+                ?max_ord
+                ?xmax_ord
+                ()
+            ))
       in
       page, next
     )
 
   let to_stream
-      ?page_size
-      ?k_direction
+      ?(page_size = 1000)
       ?min_ord
       ?xmin_ord
       ?max_ord
       ?xmax_ord
-      ?max_count
       () =
     let get_first_page () =
       get_page
-        ?page_size
-        ?k_direction
+        ~max_count:page_size
         ?min_ord
         ?xmin_ord
         ?max_ord
-        ?xmax_ord
-        ?max_count
-        ()
+        ?xmax_ord ()
     in
     Mysql_util.stream_from_pages get_first_page
 
   let iter
       ?page_size
-      ?k_direction
       ?min_ord
       ?xmin_ord
       ?max_ord
       ?xmax_ord
-      ?max_count
       ?(max_threads = 1) f =
     let stream =
       to_stream
         ?page_size
-        ?k_direction
         ?min_ord
         ?xmin_ord
         ?max_ord
         ?xmax_ord
-        ?max_count
         ()
     in
     Util_lwt_stream.iter max_threads stream f
 
   let to_list
       ?page_size
-      ?k_direction
       ?min_ord
       ?xmin_ord
       ?max_ord
-      ?xmax_ord
-      ?max_count
-      () =
+      ?xmax_ord () =
     Lwt_stream.to_list (to_stream
                           ?page_size
-                          ?k_direction
                           ?min_ord
                           ?xmin_ord
                           ?max_ord
                           ?xmax_ord
-                          ?max_count
                           ()
                        )
 
@@ -499,11 +450,7 @@ struct
         ?xmax_ord
         ()
     in
-    let limit =
-      match max_count with
-      | None -> ""
-      | Some n -> make_limit_clause n max_count
-    in
+    let limit = make_limit_clause max_count in
     let st =
       sprintf "delete from %s%s%s;" esc_tblname where limit
     in
@@ -664,13 +611,7 @@ let test_kv_paging () =
   end
   in
   let module Tbl = Make (Param) in
-  let open Printf in
   let open Lwt in
-  let print_list l =
-    printf "[\n";
-    List.iter (fun (k, v, ord) -> printf "  %i, %g, %g\n" k v ord) l;
-    printf "]\n%!";
-  in
   Util_lwt_main.run (
     Tbl.create_table () >>= fun () ->
     let data = [
@@ -685,25 +626,6 @@ let test_kv_paging () =
     Lwt_list.iter_s (fun (k, v) ->
       Tbl.put k v
     ) data >>= fun () ->
-
-    Tbl.to_list () >>= fun l ->
-    print_list l;
-    assert (List.length l = List.length data);
-
-    Tbl.to_list ~k_direction:`Asc ~max_count:1 () >>= fun l ->
-    print_list l;
-    (match l with
-     | [ 1, 1., _ ] -> ()
-     | _ -> assert false
-    );
-
-    Tbl.to_list ~k_direction:`Desc ~max_count:2 ~page_size:1 () >>= fun l ->
-    print_list l;
-    (match l with
-     | [ 6, 1., _;
-         5, 1., _ ] -> ()
-     | _ -> assert false
-    );
 
     Tbl.to_list ~page_size:3 () >>= fun l ->
     let extracted_keys = List.map (fun (k, v, ord) -> k) l in
