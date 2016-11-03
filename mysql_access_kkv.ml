@@ -160,7 +160,8 @@ sig
     key2 ->
     (value -> (value option * 'result) Lwt.t) ->
     'result Lwt.t
-    (* Update a value. For access to key1 and ord, use update_full instead.
+    (* Update an existing value.
+       For access to key1 and ord, use update_full instead.
        An exception is raised if the value doesn't already exist. *)
 
   val update_full :
