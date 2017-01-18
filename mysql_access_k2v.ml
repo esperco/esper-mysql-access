@@ -85,7 +85,7 @@ sig
     ?max_ord: ord ->
     ?xmax_ord: ord ->
     ?max_threads: int ->
-    ((key1 * key2 * value * ord) -> unit Lwt.t) ->
+    (key1 -> key2 -> value -> ord -> unit Lwt.t) ->
     unit Lwt.t
     (* iterate over all entries in the table sequentially.
        page_size is the number of items to fetch in one mysql query
@@ -339,7 +339,8 @@ struct
         ?max_ord
         ?xmax_ord
         () in
-    Util_lwt_stream.iter max_threads stream f
+    Util_lwt_stream.iter max_threads stream
+      (fun (k1, k2, v, ord) -> f k1 k2 v ord)
 
   let to_list
       ?page_size
