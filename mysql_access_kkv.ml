@@ -46,6 +46,12 @@ sig
   val count1 : key1 -> int Lwt.t
     (* Count number of entries under key1. *)
 
+  val sum : unit -> float Lwt.t
+    (* Add up all the values found in the `ord` column. *)
+
+  val sum1 : key1 -> float Lwt.t
+    (* Add up the values found in the `ord` column for the specified key. *)
+
   val to_stream :
     ?page_size: int ->
     ?min_ord: ord ->
@@ -277,28 +283,31 @@ struct
     | `Asc -> ">"
     | `Desc -> "<"
 
+  let where_k1 k1 =
+    sprintf " where k1='%s'" (esc_key1 k1)
+
+  let compute_value ?(where = "") expr result_of_string =
+    let st =
+      sprintf "select %s from %s %s;"
+        expr esc_tblname where
+    in
+    Mysql_lwt.mysql_exec st (fun x ->
+      match Mysql.fetch (fst (Mysql_lwt.unwrap_result x)) with
+      | Some [| Some n |] -> result_of_string n
+      | _ -> failwith ("Broken result returned on: " ^ st)
+    )
 
   let count () =
-    let st =
-      sprintf "select count(*) from %s;"
-        esc_tblname
-    in
-    Mysql_lwt.mysql_exec st (fun x ->
-      match Mysql.fetch (fst (Mysql_lwt.unwrap_result x)) with
-      | Some [| Some n |] -> int_of_string n
-      | _ -> failwith ("Broken result returned on: " ^ st)
-    )
+    compute_value "count(*)" int_of_string
 
   let count1 k1 =
-    let st =
-      sprintf "select count(*) from %s where k1='%s';"
-        esc_tblname (esc_key1 k1)
-    in
-    Mysql_lwt.mysql_exec st (fun x ->
-      match Mysql.fetch (fst (Mysql_lwt.unwrap_result x)) with
-      | Some [| Some n |] -> int_of_string n
-      | _ -> failwith ("Broken result returned on: " ^ st)
-    )
+    compute_value ~where:(where_k1 k1) "count(*)" int_of_string
+
+  let sum () =
+    compute_value "sum(ord)" float_of_string
+
+  let sum1 k1 =
+    compute_value ~where:(where_k1 k1) "sum(ord)" float_of_string
 
   let make_where_clause
       ?key1
@@ -928,6 +937,18 @@ let test_kkv_paging () =
     Lwt_list.iter_s (fun (k1, k2, v) ->
       Tbl.put k1 k2 v
     ) data >>= fun () ->
+
+    Tbl.count () >>= fun n ->
+    assert (n = List.length data);
+
+    Tbl.count1 1 >>= fun n ->
+    assert (n = 4);
+
+    Tbl.sum () >>= fun x ->
+    assert (x = 25.);
+
+    Tbl.sum1 1 >>= fun x ->
+    assert (x = 23.);
 
     Tbl.get_min_ord () >>= fun m ->
     assert (m = Some 1.);
