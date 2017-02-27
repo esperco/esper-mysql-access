@@ -286,16 +286,23 @@ struct
   let where_k1 k1 =
     sprintf " where k1='%s'" (esc_key1 k1)
 
-  let compute_value ?(where = "") expr result_of_string =
+  let compute_opt_value ?(where = "") expr result_of_opt_string =
     let st =
       sprintf "select %s from %s %s;"
         expr esc_tblname where
     in
     Mysql_lwt.mysql_exec st (fun x ->
       match Mysql.fetch (fst (Mysql_lwt.unwrap_result x)) with
-      | Some [| Some n |] -> result_of_string n
+      | Some [| opt_string |] -> result_of_opt_string opt_string
       | _ -> failwith ("Broken result returned on: " ^ st)
     )
+
+  let compute_value ?where expr result_of_string =
+    let result_of_opt_string = function
+      | None -> failwith "Unexpected null result"
+      | Some s -> result_of_string s
+    in
+    compute_opt_value ?where expr result_of_opt_string
 
   let count () =
     compute_value "count(*)" int_of_string
@@ -304,10 +311,12 @@ struct
     compute_value ~where:(where_k1 k1) "count(*)" int_of_string
 
   let sum () =
-    compute_value "sum(ord)" float_of_string
+    compute_opt_value "sum(ord)"
+      (function None -> 0. | Some s -> float_of_string s)
 
   let sum1 k1 =
-    compute_value ~where:(where_k1 k1) "sum(ord)" float_of_string
+    compute_opt_value ~where:(where_k1 k1) "sum(ord)"
+      (function None -> 0. | Some s -> float_of_string s)
 
   let make_where_clause
       ?key1
