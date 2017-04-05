@@ -760,10 +760,10 @@ struct
     tblname ^ ":" ^ (Param.Key2.to_string k)
 
   let lock1 k f =
-    Redis_mutex.with_mutex (mutex_name1 k) f
+    Mysql_util.(lock.lock) (mutex_name1 k) f
 
   let lock2 k f =
-    Redis_mutex.with_mutex (mutex_name2 k) f
+    Mysql_util.(lock.lock) (mutex_name2 k) f
 
   let update_full k2 f =
     lock2 k2 (fun () ->

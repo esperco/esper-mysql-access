@@ -1,5 +1,18 @@
 open Lwt
 
+type lock = {
+  mutable lock: 'a. string -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+}
+  (* run a computation under the given name while no other
+     computation runs under the same name at the same time. *)
+
+(*
+    Needs to be initialized with the locking implementation of your choice:
+
+       lock.lock <- Redis_mutex.with_mutex
+ *)
+let lock = { lock = fun key f -> assert false }
+
 let fetch_all res =
   let rec aux acc =
     match Mysql.fetch res with

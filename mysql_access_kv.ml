@@ -490,7 +490,7 @@ struct
     tblname ^ ":" ^ (Param.Key.to_string k)
 
   let lock k f =
-    Redis_mutex.with_mutex (mutex_name k) f
+    Mysql_util.(lock.lock) (mutex_name k) f
 
   let update_full k f =
     lock k (fun () ->

@@ -551,10 +551,10 @@ replace into %s (k1, k2, v, ord) values ('%s', '%s', '%s', %s);
     tblname ^ ":" ^ (Param.Key2.to_string k)
 
   let lock1 k f =
-    Redis_mutex.with_mutex (mutex_name1 k) f
+    Mysql_util.(lock.lock) (mutex_name1 k) f
 
   let lock2 k f =
-    Redis_mutex.with_mutex (mutex_name2 k) f
+    Mysql_util.(lock.lock) (mutex_name2 k) f
 
   let update_full k1 k2 f =
     lock1 k1 (fun () ->
